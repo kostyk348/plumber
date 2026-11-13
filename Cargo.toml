@@ -1,6 +1,6 @@
 [package]
 name = "plumber"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Plan 9's plumber, rebuilt: message routing between programs by rules, not by integrations"
 license = "MIT OR Apache-2.0"
@@ -18,6 +18,10 @@ path = "src/bin/plumberd.rs"
 [[bin]]
 name = "plumb"
 path = "src/bin/plumb.rs"
+
+[[bin]]
+name = "plumber-open"
+path = "src/bin/plumber_open.rs"
 
 [dependencies]
 # A rules file speaks regular expressions; the crate is the standard, safe one.

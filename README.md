@@ -80,6 +80,42 @@ Objects: `src`, `dst`, `wdir`, `type`, `attr`, `data`, `arg`. Verbs: `is`, `isfi
 `plumb hide`. Substitutions: `$0`…`$n` (captures), `$file`, `$dir`, `$wdir`, `$src`, `$dst`,
 `$type`.
 
+## Opening, not just delivering
+
+A reader that actually opens what arrives is `plumber-open`:
+
+```sh
+plumber-open edit                                     # uses the built-in chain: code -g, code, notepad
+plumber-open web    --cmd 'firefox {data}'
+plumber-open pdf    --once --dry-run                  # show the command line, open nothing
+```
+
+Placeholders: `{data}`, `{file}`, `{line}`, `{page}`, `{addr}`, `{dir}`, `{attr:name}`. A port has a
+default opener — the table Plan 9 kept in `/lib/plumbing` next to the rules — and `--cmd` replaces
+it. The built-in list is a fallback chain: a candidate whose program is not on `PATH` is skipped and
+the next one is tried, and if none is installed the opener says which ones it tried instead of
+failing silently.
+
+| port | default opener |
+|---|---|
+| `edit` | `code -g {file}:{line}` → `code {file}` → `notepad {file}` |
+| `web` | `cmd /c start "" {data}` (Windows) → `xdg-open {data}` |
+| `pdf` | `pdfcraft {file} --page {page}` → `cmd /c start "" {file}` → `xdg-open {file}` |
+| `scene` | `cadcraft {file}` |
+
+With the PDF rule from `plumbing.example`, `manual.pdf:7` in any log becomes
+`pdfcraft <resolved path> --page 7` — the page number travels as an attribute, so the viewer does
+not have to parse the path again:
+
+```plumb
+type is text
+data matches '([a-zA-Z0-9_/\-]+\.pdf)('$addr')?'
+arg isfile $1
+data set $file
+attr add page=$2
+plumb to pdf
+```
+
 ## Why this is useful now
 
 The integration problem is back, in a worse form: agents and desktop tools each hard-wire the tools
@@ -92,19 +128,32 @@ output — only what the output is. That is the whole trick, and it is forty yea
 cargo test
 ```
 
-Ten tests, no mocks: the wire format round-trips (including data with newlines), the first rule set
-wins, an unmatched message is discarded, a path that exists is rewritten to its resolved form, a
-missing file falls through to the next rule set, macros expand, a bad regex names its line, a rule
-set without a pattern is refused, and one end-to-end test drives a real daemon over a real socket
-(reader subscribes, sender sends, reader receives the rewritten message).
+Twenty-two tests, no mocks.
+
+Of the rules and the daemon (13): the wire format round-trips (including data with newlines), the
+first rule set wins, an unmatched message is refused to the sender, an existing path is rewritten to
+its resolved form, a missing file falls through to the next rule set, macros expand — including
+inside a quoted regular expression, a macro named like a rule variable does not hijack `$file`, a
+bad regex names its line, a rule set without a pattern is refused, a message for a port nobody reads
+is held and delivered to the reader that arrives later, and two end-to-end tests drive a real daemon
+over a real socket.
+
+Of the opener (9): a line number fills the editor command, a missing line number drops the colon
+instead of the file, a page message becomes `pdfcraft … --page 7`, `{attr:name}` works, a quoted
+empty argument survives the split (Windows `start` needs it), the fallback chain skips programs that
+are not installed, and a port with no opener says so.
 
 ## Roadmap
 
-- `plumb client` holding a message until the port opens (implemented as a hold queue; needs a test
-  that a reader arriving later receives it).
-- A Windows named-pipe transport, and a real 9P file server for the platforms that can mount one.
-- Starter rules for: logs + PdfCraft (`page.pdf:12`), EPLAN catalogue part numbers, `doi:` links,
-  git object ids.
+- A Windows named-pipe transport next to the loopback socket, so an app can read a port without a
+  TCP listener, and a real 9P file server for the platforms that can mount one.
+- Rules for `doi:10.5281/zenodo…` links (to the museum's own bibliography) and for git object ids
+  (to `git show`).
+- An `edit` opener that honours a line number without VS Code: `notepad` ignores it, so the opener
+  prints the line and the `addr` attribute instead of pretending.
+
+Done since the first version: `plumb-open` (a reader that opens), the `page.pdf:12` rule that hands
+a page number to PdfCraft, and the hold queue for a port whose reader starts later.
 
 ## Licence
 

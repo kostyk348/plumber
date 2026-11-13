@@ -16,6 +16,15 @@ domain='[a-zA-Z0-9_@]+([.:][a-zA-Z0-9_@]+)*/?[a-zA-Z0-9_?,%#~&/\-]+'
 # named `tail` here on purpose.
 tail='([:.][a-zA-Z0-9_?,%#~&/\-]+)*'
 
+# A PDF page reference goes to the PDF viewer, not the editor — this rule must come before the
+# file rule below, because `manual.pdf:7` names a file that exists too, and first match wins.
+type is text
+data matches '([a-zA-Z0-9_/\-]+\.pdf)('$addr')?'
+arg isfile $1
+data set $file
+attr add page=$2
+plumb to pdf
+
 # An existing file, possibly tagged with a line number: open it in the editor at that line.
 # `arg isfile $1` is the interesting part — the rule asks the file system whether what it matched
 # is really a path, which is what makes $file available for the rewrite below.
@@ -44,3 +53,13 @@ plumb to catalog
 
 # Everything else that claims to be text and was sent with an explicit destination keeps it;
 # anything else is discarded, and the sender is told so.
+
+# A rule can also ask for a reader to be started instead of failing when nobody is listening
+# (`plumb client` in plumb(4)): the message is held until somebody opens the port. Commented out
+# because it changes what the sender sees for part numbers.
+#
+# type is text
+# data matches '(EPLAN|XB)-[0-9A-Z\-]+'
+# attr add part=$0
+# plumb to catalog
+# plumb client catalog

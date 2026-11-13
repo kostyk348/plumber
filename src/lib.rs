@@ -26,8 +26,10 @@
 
 pub mod daemon;
 pub mod message;
+pub mod open;
 pub mod rules;
 
 pub use daemon::{Config, Daemon};
 pub use message::Message;
+pub use open::open;
 pub use rules::{Action, Route, Rules};

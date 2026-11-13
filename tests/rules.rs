@@ -184,6 +184,48 @@ fn the_daemon_delivers_a_message_to_a_reader() {
 }
 
 #[test]
+fn a_message_for_a_port_nobody_reads_is_held_for_the_next_reader() {
+    // plumb(4): when a rule names a client, the message waits instead of being refused. This is
+    // what makes "send first, start the viewer later" work.
+    let dir = std::env::temp_dir().join("plumber-test-hold");
+    std::fs::create_dir_all(&dir).unwrap();
+    let rules_path = dir.join("plumbing");
+    std::fs::write(
+        &rules_path,
+        "type is text\ndata matches 'hello'\nattr add held=yes\nplumb to greeting\nplumb client greeting\n",
+    )
+    .unwrap();
+    let daemon = Daemon::bind(Config { rules: rules_path, port: 0, port_file: None, allow_start: false }).expect("bind");
+    let port = daemon.local_port().expect("port");
+    std::thread::spawn(move || {
+        let _ = daemon.serve();
+    });
+
+    // Nobody is reading yet: the message is held, and the sender is told so.
+    let mut sender = TcpStream::connect(("127.0.0.1", port)).expect("connect sender");
+    let wire = Message::new("test", "text", "hello later").to_wire();
+    write!(sender, "SEND {}\n", wire.len()).unwrap();
+    sender.write_all(wire.as_bytes()).unwrap();
+    sender.flush().unwrap();
+    let mut reply = String::new();
+    BufReader::new(sender).read_line(&mut reply).unwrap();
+    assert_eq!(reply.trim(), "OK greeting (held for a client)");
+
+    // A reader arrives afterwards and gets the message that was waiting.
+    let mut reader = BufReader::new(TcpStream::connect(("127.0.0.1", port)).expect("connect reader"));
+    reader.get_mut().write_all(b"READ greeting\n").unwrap();
+    reader.get_mut().flush().unwrap();
+    let mut length = String::new();
+    reader.read_line(&mut length).unwrap();
+    let bytes: usize = length.trim().parse().expect("frame length");
+    let mut body = vec![0u8; bytes];
+    reader.read_exact(&mut body).unwrap();
+    let received = Message::from_wire(&String::from_utf8_lossy(&body)).expect("parse received");
+    assert_eq!(received.data, "hello later");
+    assert_eq!(received.attr_get("held"), Some("yes"));
+}
+
+#[test]
 fn a_message_with_nowhere_to_go_is_an_error_to_the_sender() {
     let dir = std::env::temp_dir().join("plumber-test-noroute");
     std::fs::create_dir_all(&dir).unwrap();

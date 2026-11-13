@@ -1,0 +1,46 @@
+# Plumbing rules — the file that decides where a piece of text goes.
+#
+# It is not a list of integrations: the sender says *what the data is* and the rules decide who
+# opens it. Order matters — the first rule set whose patterns all match wins, so keep the most
+# specific rules at the top, exactly as plumb(6) recommends.
+#
+#   plumberd --rules plumbing --allow-start
+#   plumb test --rules plumbing "src/main.rs:42"      # what would happen
+#   plumb read edit                                   # a reader for the `edit` port
+
+addr=':([0-9]+)'
+protocol='(https?|ftp|file|mailto|doi)'
+domain='[a-zA-Z0-9_@]+([.:][a-zA-Z0-9_@]+)*/?[a-zA-Z0-9_?,%#~&/\-]+'
+# Note: this macro must not be called `file` — `$file` is a rule variable (the path an `isfile`
+# pattern resolved), and the variable wins over a macro of the same name. The suffix macro is
+# named `tail` here on purpose.
+tail='([:.][a-zA-Z0-9_?,%#~&/\-]+)*'
+
+# An existing file, possibly tagged with a line number: open it in the editor at that line.
+# `arg isfile $1` is the interesting part — the rule asks the file system whether what it matched
+# is really a path, which is what makes $file available for the rewrite below.
+type is text
+data matches '([.a-zA-Z0-9_/\-]+[a-zA-Z0-9_/\-])('$addr')?'
+arg isfile $1
+data set $file
+attr add addr=$2
+plumb to edit
+
+# A source location that does not exist on this machine still goes to the editor: a stack frame
+# from a CI log is useful even before the repository is cloned.
+type is text
+data matches '([a-zA-Z0-9_/\-]+\.(rs|c|h|py|tex|md)):([0-9]+)(:([0-9]+))?'
+plumb to edit
+
+# URLs and DOI links go to the browser.
+type is text
+data matches '$protocol://.*'
+plumb to web
+
+# A part number from the EPLAN catalogue.
+type is text
+data matches '(EPLAN|XB)-[0-9A-Z\-]+'
+plumb to catalog
+
+# Everything else that claims to be text and was sent with an explicit destination keeps it;
+# anything else is discarded, and the sender is told so.

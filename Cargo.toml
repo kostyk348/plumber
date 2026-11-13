@@ -1,0 +1,29 @@
+[package]
+name = "plumber"
+version = "0.1.0"
+edition = "2021"
+description = "Plan 9's plumber, rebuilt: message routing between programs by rules, not by integrations"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/kostyk348/plumber"
+rust-version = "1.80"
+
+[lib]
+name = "plumber"
+path = "src/lib.rs"
+
+[[bin]]
+name = "plumberd"
+path = "src/bin/plumberd.rs"
+
+[[bin]]
+name = "plumb"
+path = "src/bin/plumb.rs"
+
+[dependencies]
+# A rules file speaks regular expressions; the crate is the standard, safe one.
+regex = "1"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+strip = true

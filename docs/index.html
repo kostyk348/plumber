@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>plumber — маршрутизация сообщений по правилам</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2230; --line: #2b3444;
+    --fg: #e6edf3; --muted: #96a1b0; --accent: #6ab7ff; --accent2: #7ee2b8;
+    --warn: #ffb86b; --code: #0a0e14; --max: 980px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.65 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(106,183,255,.3); }
+  a:hover { border-bottom-color: var(--accent); }
+  .wrap { max-width: var(--max); margin: 0 auto; padding: 0 24px; }
+  header {
+    border-bottom: 1px solid var(--line);
+    background: radial-gradient(1200px 380px at 15% -20%, #1b2a44 0%, var(--bg) 62%);
+    padding: 64px 0 56px;
+  }
+  .eyebrow { color: var(--accent2); font-size: 13px; letter-spacing: .14em; text-transform: uppercase; margin: 0 0 14px; }
+  h1 { font-size: clamp(30px, 5vw, 48px); line-height: 1.1; margin: 0 0 18px; letter-spacing: -.02em; }
+  h1 span { color: var(--accent); }
+  .lead { font-size: 19px; color: var(--muted); max-width: 760px; margin: 0 0 26px; }
+  .lead b { color: var(--fg); font-weight: 600; }
+  .btns { display: flex; flex-wrap: wrap; gap: 12px; }
+  .btn {
+    display: inline-block; padding: 11px 18px; border-radius: 9px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--fg); font-size: 15px; border-bottom-width: 1px;
+  }
+  .btn.primary { background: linear-gradient(180deg, #2b6fb0, #235a91); border-color: #3d7fb8; }
+  .btn:hover { transform: translateY(-1px); }
+  section { padding: 54px 0; border-bottom: 1px solid var(--line); }
+  h2 { font-size: 27px; margin: 0 0 10px; letter-spacing: -.01em; }
+  h2 .num { color: var(--accent2); font-variant-numeric: tabular-nums; margin-right: 10px; font-size: 20px; }
+  .sub { color: var(--muted); margin: 0 0 26px; max-width: 780px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px;
+  }
+  .card h3 { margin: 0 0 8px; font-size: 17px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  .card .tag { display: inline-block; font-size: 12px; color: var(--accent2); letter-spacing: .06em; text-transform: uppercase; margin-bottom: 8px; }
+  pre {
+    background: var(--code); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; overflow-x: auto; font-size: 14px; line-height: 1.6;
+    font-family: "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+  }
+  code { font-family: "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace; font-size: .93em; }
+  p code, li code, td code { background: #0f1520; border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; }
+  .flow { display: grid; gap: 10px; margin: 24px 0 8px; }
+  .flow-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .node {
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 9px; padding: 9px 13px;
+    font-size: 14px;
+  }
+  .node.rule { border-color: #3d7fb8; background: #16283c; }
+  .node.port { border-color: #2f6b53; background: #12261f; color: var(--accent2); }
+  .arrow { color: var(--muted); font-size: 13px; }
+  .note { border-left: 3px solid var(--warn); padding: 4px 0 4px 16px; color: var(--muted); margin: 20px 0; }
+  .note b { color: var(--fg); }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 4px; font-size: 15px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; }
+  .ok { color: var(--accent2); }
+  .no { color: var(--warn); }
+  footer { padding: 40px 0 60px; color: var(--muted); font-size: 14px; }
+  .swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--accent2); margin-right: 8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <p class="eyebrow">Plan 9, 1992 → сегодня</p>
+    <h1>Программа говорит, <span>что</span> у неё за текст.<br>Правила решают, <span>кто</span> его откроет.</h1>
+    <p class="lead">
+      <b>plumber</b> — один демон и один текстовый файл правил вместо интеграций «каждый с каждым».
+      Строка из лога <code>main.rs:42</code> открывает редактор на сорок второй строке,
+      <code>manual.pdf:7</code> — документ на седьмой странице, номер детали — каталог.
+      Программы при этом не знают друг о друге.
+    </p>
+    <div class="btns">
+      <a class="btn primary" href="https://github.com/kostyk348/plumber">Исходники на GitHub</a>
+      <a class="btn" href="#why">Что это даёт</a>
+      <a class="btn" href="#how">Как работает</a>
+      <a class="btn" href="#rules">Файл правил</a>
+    </div>
+  </div>
+</header>
+
+<section id="why">
+  <div class="wrap">
+    <h2><span class="num">01</span>Что это даёт</h2>
+    <p class="sub">
+      Обычная интеграция — это договор между двумя программами: просмотрщик логов знает про редактор,
+      каталог знает про браузер, и каждая пара пишется руками. Пять программ — двадцать пять связей.
+      Plumber убирает связь: программа отдаёт текст в одно место, а <em>что</em> с ним делать — дело правил.
+    </p>
+
+    <div class="grid">
+      <div class="card">
+        <span class="tag">N×M → N+M</span>
+        <h3>Новый инструмент — это одно правило</h3>
+        <p>
+          Чтобы подключить новый редактор, браузер или каталог, не меняют ни одну программу-отправителя.
+          Правило в файле, читатель порта — и всё. Десять отправителей и десять получателей: было сто
+          интеграций, стало двадцать.
+        </p>
+      </div>
+      <div class="card">
+        <span class="tag">Контекст</span>
+        <h3>Один и тот же текст значит разное</h3>
+        <p>
+          <code>XB-24</code> — номер детали и идёт в каталог. <code>XB-24.pdf:3</code> — документ и идёт
+          в просмотрщик PDF на страницу 3. <code>XB-24.rs:11</code> — файл и идёт в редактор.
+          Решает не отправитель, а правила: тип, содержимое и то, существует ли файл на диске.
+        </p>
+      </div>
+      <div class="card">
+        <span class="tag">Прозрачность</span>
+        <h3>Маршрутизация — это файл, а не код</h3>
+        <p>
+          Что куда попадает, видно в одном текстовом файле: его можно прочитать, обсудить, положить
+          в git и ограничить. Это же и граница безопасности: <code>plumb start</code> — исполняемое
+          содержимое, поэтому запуск команд выключен по умолчанию.
+        </p>
+      </div>
+      <div class="card">
+        <span class="tag">Без агентов</span>
+        <h3>Работает и для человека, и для скрипта</h3>
+        <p>
+          Отправитель — любая программа, которая умеет печатать в сокет: сборка, тест, скрипт, агент.
+          Поэтому сломанная строка из CI открывается в редакторе тем же правилом, что и из лога.
+        </p>
+      </div>
+    </div>
+
+    <div class="flow">
+      <div class="flow-row">
+        <span class="node">лог <code>main.rs:42</code></span>
+        <span class="arrow">→</span>
+        <span class="node rule">правило: файл существует? да → <code>data set $file</code>, <code>addr=:42</code></span>
+        <span class="arrow">→</span>
+        <span class="node port">порт <code>edit</code></span>
+        <span class="arrow">→</span>
+        <span class="node">редактор на строке 42</span>
+      </div>
+      <div class="flow-row">
+        <span class="node">смета <code>manual.pdf:7</code></span>
+        <span class="arrow">→</span>
+        <span class="node rule">правило: это PDF → <code>page=7</code></span>
+        <span class="arrow">→</span>
+        <span class="node port">порт <code>pdf</code></span>
+        <span class="arrow">→</span>
+        <span class="node">pdfcraft <code>--page 7</code></span>
+      </div>
+      <div class="flow-row">
+        <span class="node">накладная <code>EPLAN-XB-24</code></span>
+        <span class="arrow">→</span>
+        <span class="node rule">правило: шаблон детали</span>
+        <span class="arrow">→</span>
+        <span class="node port">порт <code>catalog</code></span>
+        <span class="arrow">→</span>
+        <span class="node">каталог</span>
+      </div>
+    </div>
+
+    <div class="note">
+      <b>Что именно было потеряно.</b> В Plan 9 это работало на уровне системы: файл <code>/mnt/plumb/send</code>
+      и правила в <code>/lib/plumbing</code>. Со смертью системы идея исчезла, а проблема вернулась —
+      теперь каждый редактор, браузер и каталог договариваются друг с другом заново.
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <h2><span class="num">02</span>Как это работает</h2>
+    <p class="sub">Три части: сообщение, правила, порты. Сообщение — семь полей, ровно как в <code>plumb(6)</code> 1992 года.</p>
+
+    <table>
+      <tr><th>Поле</th><th>Что это</th></tr>
+      <tr><td><code>src</code>, <code>dst</code></td><td>кто отправил и на какой порт попало (порт выбирают правила, не отправитель)</td></tr>
+      <tr><td><code>wdir</code></td><td>рабочий каталог отправителя — чтобы относительный путь стал настоящим</td></tr>
+      <tr><td><code>type</code></td><td>тип содержимого: <code>text</code>, <code>image</code>, …</td></tr>
+      <tr><td><code>attr</code></td><td>пары вида <code>addr=:42</code>, <code>page=7</code> — то, что нельзя выразить в самом тексте</td></tr>
+      <tr><td><code>ndata</code></td><td>длина <code>data</code> в байтах — поэтому в тексте бывают переводы строк</td></tr>
+      <tr><td><code>data</code></td><td>сам текст</td></tr>
+    </table>
+
+<pre><code>продюсер ──send──▶ plumberd ──правила──▶ порт edit  ──▶ редактор
+                            ├───────────▶ порт pdf   ──▶ pdfcraft
+                            └───────────▶ порт web   ──▶ браузер
+
+если на порту никого нет:
+  правило называет клиента → сообщение ждёт (придерживается) и придёт тому, кто откроет порт позже
+  иначе                    → отправитель получает ошибку, как write() в Plan 9</code></pre>
+
+    <p class="sub" style="margin-top:22px">
+      Транспорт — loopback TCP, потому что в Windows нет файлового сервера, который можно смонтировать
+      процессу. Правила перезагружаются по времени изменения файла, так что для правки достаточно
+      текстового редактора.
+    </p>
+  </div>
+</section>
+
+<section id="rules">
+  <div class="wrap">
+    <h2><span class="num">03</span>Файл правил</h2>
+    <p class="sub">
+      Наборы правил разделены пустой строкой. Срабатывает первый набор, у которого совпали все условия, —
+      поэтому частное пишут выше общего. Условия смотрят на сообщение, действия им распоряжаются.
+    </p>
+
+<pre><code>addr=':([0-9]+)'                       # макрос раскрывается при чтении файла
+
+# страница PDF — раньше файлового правила, потому что manual.pdf:7 тоже «существующий файл»
+type is text
+data matches '([a-zA-Z0-9_/\-]+\.pdf)('$addr')?'
+arg isfile $1                          # а это правда файл на диске?
+data set $file                         # тогда заменить текст на разрешённый путь
+attr add page=$2                       # а номер страницы — в атрибут
+plumb to pdf
+
+# существующий файл со строкой — в редактор
+type is text
+data matches '([.a-zA-Z0-9_/\-]+[a-zA-Z0-9_/\-])('$addr')?'
+arg isfile $1
+data set $file
+attr add addr=$2
+plumb to edit</code></pre>
+
+    <table>
+      <tr><th>Объекты</th><td><code>src</code> <code>dst</code> <code>wdir</code> <code>type</code> <code>attr</code> <code>data</code> <code>arg</code></td></tr>
+      <tr><th>Глаголы</th><td><code>is</code> <code>isfile</code> <code>isdir</code> <code>matches</code> <code>set</code> <code>add</code> <code>delete</code></td></tr>
+      <tr><th>Действия</th><td><code>plumb to</code> <code>plumb start</code> <code>plumb client</code> <code>plumb hide</code></td></tr>
+      <tr><th>Подстановки</th><td><code>$0</code>…<code>$n</code> <code>$file</code> <code>$dir</code> <code>$wdir</code> <code>$src</code> <code>$dst</code> <code>$type</code></td></tr>
+    </table>
+  </div>
+</section>
+
+<section id="try">
+  <div class="wrap">
+    <h2><span class="num">04</span>Попробовать</h2>
+    <p class="sub">Три команды: демон, читатель порта, отправитель.</p>
+<pre><code>cargo build --release
+
+./target/release/plumberd --rules plumbing.example        # 1. демон
+./target/release/plumb-open edit                          # 2. читатель (в другом окне)
+
+./target/release/plumb send "src/main.rs:42"              # 3. отправитель
+#   OK edit
+#   читатель: would run: code -g src/main.rs:42
+
+./target/release/plumb test --rules plumbing.example "manual.pdf:7"   # без демона: что будет</code></pre>
+
+    <div class="grid" style="margin-top:22px">
+      <div class="card"><span class="tag">plumberd</span><h3>Демон</h3><p>Слушает loopback, держит порты и читателей, перезагружает правила по mtime. <code>SEND</code> <code>READ</code> <code>PORTS</code> <code>RULES</code> <code>PING</code> — протокол настолько простой, что с ним говорит <code>nc</code>.</p></div>
+      <div class="card"><span class="tag">plumb</span><h3>Клиент</h3><p>Отправить сообщение, читать порт, узнать порты, сухой прогон правил. Сухой прогон — самый быстрый способ отладить сам файл правил.</p></div>
+      <div class="card"><span class="tag">plumb-open</span><h3>Открыватель</h3><p>Читатель, который открывает: цепочка программ по умолчанию на каждый порт, шаблоны <code>{file}</code> <code>{line}</code> <code>{page}</code> <code>{attr:name}</code>, <code>--dry-run</code>.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="state">
+  <div class="wrap">
+    <h2><span class="num">05</span>Состояние — без прикрас</h2>
+    <table>
+      <tr><th>Что</th><th>Как есть</th></tr>
+      <tr><td>Тесты</td><td><span class="ok">22 зелёных</span>, без моков: формат сообщения, порядок правил, переписывание пути, придержанное сообщение, два end-to-end через реальный сокет</td></tr>
+      <tr><td>Проверено вживую</td><td><span class="ok">да</span>: демон + два читателя + три отправки; <code>manual.pdf:7</code> → <code>pdfcraft … --page 7</code></td></tr>
+      <tr><td>Named pipes</td><td><span class="no">нет</span>, транспорт только loopback TCP</td></tr>
+      <tr><td>Строка без VS Code</td><td><span class="no">теряется</span>: <code>notepad</code> не умеет переходить на строку — нужен свой <code>--cmd</code> или редактор, который умеет</td></tr>
+      <tr><td>Мелочи</td><td>пути в правилах пишутся с <code>/</code>; <code>plumb start</code> выключен без <code>--allow-start</code>, потому что файл правил — исполняемое содержимое</td></tr>
+    </table>
+  </div>
+</section>
+
+<section id="next">
+  <div class="wrap">
+    <h2><span class="num">06</span>Куда дальше</h2>
+    <div class="grid">
+      <div class="card"><h3>Named pipes и 9P</h3><p>Порт без TCP-слушателя — для песочниц; и настоящий файловый сервер там, где файловую систему можно смонтировать.</p></div>
+      <div class="card"><h3>Правила для своих инструментов</h3><p><code>doi:</code> → музей, объекты git → <code>git show</code>, детали EPLAN → каталог, страницы PDF → PdfCraft.</p></div>
+      <div class="card"><h3>Больше читателей</h3><p>Читатель — это 60 строк: подписаться на порт и открыть. Писать интеграции больше не нужно — только их читателей.</p></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p><span class="swatch"></span>Первоисточники: <a href="https://man.9front.org/4/plumber">plumber(4)</a>,
+    <a href="https://man.9front.org/6/plumb">plumb(6)</a>.
+    Код: <a href="https://github.com/kostyk348/plumber">kostyk348/plumber</a> (MIT OR Apache-2.0).
+    Найдено в <a href="https://kostyk348.github.io/lost-tech-museum/">Музее потерянных идей</a>.</p>
+  </div>
+</footer>
+
+</body>
+</html>

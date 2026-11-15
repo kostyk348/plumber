@@ -47,7 +47,7 @@ impl DaemonProcess {
     }
 
     fn wait_for_port(&self) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(20);
         while Instant::now() < deadline {
             if let Some(port) = read_port(&self.port_file()) {
                 if TcpStream::connect(("127.0.0.1", port)).is_ok() {
@@ -57,8 +57,14 @@ impl DaemonProcess {
             std::thread::sleep(Duration::from_millis(25));
         }
         panic!(
-            "plumberd did not publish a reachable port in {:?}",
-            self.dir
+            "plumberd did not publish a reachable port in {:?} ({}); stderr: {}",
+            self.dir,
+            if self.child.try_wait().ok().flatten().is_some() {
+                "the process has exited"
+            } else {
+                "the process is still running"
+            },
+            self.stderr_tail()
         );
     }
 

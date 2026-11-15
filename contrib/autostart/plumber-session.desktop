@@ -3,7 +3,9 @@ Type=Application
 Name=plumber
 Comment=Start the plumber daemon and its port readers
 Comment[ru]=Демон plumber и читатели портов
-Exec=%h/.local/bin/plumber-session start
+# Autostart runs before the session PATH is complete, so $HOME is expanded explicitly. The \$ is
+# the spec's escape for a dollar sign inside double quotes — desktop-file-validate rejects a bare $.
+Exec=sh -c "exec \$HOME/.local/bin/plumber-session start"
 Icon=utilities-terminal
 Terminal=false
 NoDisplay=true

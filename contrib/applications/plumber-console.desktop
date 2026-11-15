@@ -4,10 +4,13 @@ Name=plumber console
 Name[ru]=Консоль plumber
 Comment=What the plumbing is doing: ports, journal, rules tester
 Comment[ru]=Что делает plumber: порты, журнал, проверка правил
-Exec=%h/.local/bin/plumber-console
-TryExec=%h/.local/bin/plumber-console
+# A bare command name is looked up in PATH — no $HOME or %h in Exec: desktop files have no
+# field code for the home directory, and an absolute path in a repo file is wrong on every other
+# machine.
+Exec=plumber-console
+TryExec=plumber-console
 Icon=utilities-system-monitor
 Terminal=false
 NoDisplay=false
-Categories=Utility;System;Development;
+Categories=Utility;
 Keywords=plumber;plumb;routes;rules;

@@ -37,7 +37,7 @@ impl DaemonProcess {
             .stderr(Stdio::from(stderr))
             .spawn()
             .expect("spawn plumberd");
-        let process = Self { child, dir };
+        let mut process = Self { child, dir };
         process.wait_for_port();
         process
     }
@@ -46,7 +46,7 @@ impl DaemonProcess {
         self.dir.join("port")
     }
 
-    fn wait_for_port(&self) {
+    fn wait_for_port(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(20);
         while Instant::now() < deadline {
             if let Some(port) = read_port(&self.port_file()) {

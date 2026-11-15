@@ -131,7 +131,7 @@ output — only what the output is. That is the whole trick, and it is forty yea
 cargo test
 ```
 
-Thirty-nine tests, no mocks, and the CI runs them on Linux, Windows and macOS.
+Forty tests, no mocks, and the CI runs them on Linux, Windows and macOS.
 
 Of the rules and the daemon (13): the wire format round-trips (including data with newlines), the
 first rule set wins, an unmatched message is refused to the sender, an existing path is rewritten to
@@ -152,10 +152,11 @@ characters, a cut that lands inside a multi-byte character does not panic, trail
 `ndata` are ignored, a short message is an error, attributes with spaces survive, and `Display`
 truncates by characters.
 
-Of the daemon binary (7, new): it answers `PING`, serves the rules it is running, lists the ports from
+Of the daemon binary (8, new): it answers `PING`, serves the rules it is running, lists the ports from
 the rules, routes a message to a real reader with its attributes, explains an unmatched message and
 an unread port, reloads a changed rules file, answers malformed frames instead of hanging up, refuses
-an absurd frame size, and rejects an unknown command — each test starting the actual `plumberd`.
+an absurd frame size, answers a frame the client cut short (half-closed socket), and rejects an
+unknown command — each test starting the actual `plumberd`.
 
 ## Website
 

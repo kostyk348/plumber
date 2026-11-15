@@ -66,7 +66,10 @@ fn a_path_that_exists_is_rewritten_to_its_absolute_form() {
     // The rule from plumbing.example, reduced: the file exists, so $file is set and the message
     // the receiver gets is the path, not the path plus a line number. A Windows path is written
     // with forward slashes here, which is how it appears in logs and in the example rules.
-    let dir = std::env::temp_dir().join("plumber-test-file");
+    // The rules regex cannot match a path with a space in it, and on a GitHub Windows runner
+    // `temp_dir()` is `C:\Users\RUNNER~1\AppData\Local\Temp` — or worse, a real name with a
+    // space. `CARGO_TARGET_TMPDIR` lives inside the checkout, so it is space-free everywhere.
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("plumber-test-file");
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("note.txt");
     std::fs::write(&file, "hello").unwrap();

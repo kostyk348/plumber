@@ -7,7 +7,7 @@ and the version numbers are [SemVer](https://semver.org/).
 
 ### Added
 
-- **A real test suite for the protocol.** 39 tests, no mocks: the wire format (round-trip, byte
+- **A real test suite for the protocol.** 40 tests, no mocks: the wire format (round-trip, byte
   counts for UTF-8, truncated frames, trailing bytes, attribute quoting), the rules grammar, the
   opener chains, and seven end-to-end tests that start the actual `plumberd` binary and talk to it
   over a real socket.
@@ -27,9 +27,12 @@ and the version numbers are [SemVer](https://semver.org/).
   `data` by byte count with `&rest[..ndata]`, which panics when the cut lands inside a multi-byte
   character — any client sending a wrong `ndata` with UTF-8 text could kill the connection silently.
   Slicing is now on bytes with lossy decoding.
-- **A stalled sender could hold a thread forever.** The daemon now sets a 5-second read timeout per
-  read call: a client that says `SEND 4096` and stops sending gets an error instead of pinning a
-  connection thread.
+- **A stalled sender could hold a thread forever**, and on macOS a short frame could look like a
+  silent hang-up. Framing now reads through `fill_buf` with an explicit deadline (`FRAME_READ_TIMEOUT`,
+  a 250 ms socket poll, and a five-minute idle limit for connections that stay open between
+  commands): a client that says `SEND 4096` and stops gets `ERR malformed message: timed out …`, a
+  client that half-closes gets `ERR malformed message: connection closed after N of M bytes`, and
+  both behave the same on Linux, macOS and Windows.
 - **Frame sizes are bounded** (16 MiB). A frame announcing a gigabyte is refused before any
   allocation.
 - **Malformed frames are answered, not dropped.** `ERR malformed message: …` replaces the previous
@@ -39,6 +42,10 @@ and the version numbers are [SemVer](https://semver.org/).
   line"): the lone `+` is dropped, the same way a dangling `:` already was.
 
 ### Changed
+
+- The rules test that resolves a real file now uses `CARGO_TARGET_TMPDIR`: on a Windows runner
+  `temp_dir()` can contain a space, which the rules regex legitimately does not match — the test was
+  wrong, not the code.
 
 - `plumb test` output is documented as what it is — the full message the reader would get — in the
   manual, along with the three traps that bite everyone: `isfile` fails on files that do not exist,

@@ -101,6 +101,23 @@ impl DaemonProcess {
         reply.trim_end().to_string()
     }
 
+    /// Send a partial frame and close our write side: the daemon must see EOF and still answer.
+    /// This is the platform-independent version of "the client went away mid-frame" — the case that
+    /// surfaced as a silent hang-up on macOS.
+    fn raw_half_closed(&self, payload: &[u8]) -> String {
+        let mut stream = TcpStream::connect(("127.0.0.1", self.port())).expect("connect");
+        stream.write_all(payload).expect("write raw");
+        stream.flush().expect("flush");
+        stream
+            .shutdown(std::net::Shutdown::Write)
+            .expect("half-close");
+        let mut reply = String::new();
+        BufReader::new(stream)
+            .read_line(&mut reply)
+            .expect("read reply");
+        reply.trim_end().to_string()
+    }
+
     /// SEND a message and read the daemon's verdict.
     fn send(&self, message: &Message) -> String {
         let wire = message.to_wire();
@@ -279,6 +296,19 @@ fn daemon_binary_answers_malformed_messages_instead_of_hanging_up() {
     );
 
     // And after all that the daemon is still healthy.
+    assert_eq!(daemon.request("PING"), "PONG");
+}
+
+#[test]
+fn daemon_binary_answers_a_frame_cut_short_by_the_client() {
+    // "SEND 40" followed by 16 bytes and a closed socket: the daemon has to name the problem
+    // instead of dropping the connection, which is what a client cannot tell from a crash.
+    let daemon = DaemonProcess::start(EDIT_RULE);
+    let reply = daemon.raw_half_closed(b"SEND 40\nonly a few bytes");
+    assert!(
+        reply.starts_with("ERR malformed message") && reply.contains("closed"),
+        "got {reply:?}"
+    );
     assert_eq!(daemon.request("PING"), "PONG");
 }
 

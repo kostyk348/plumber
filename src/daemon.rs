@@ -16,12 +16,21 @@
 /// not allocated: the socket is loopback-only, but "only I can reach it" is not a memory budget.
 pub const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
-/// How long one read call may stall before the connection is treated as broken. Generous for a
-/// loopback frame, short enough that a wedged client cannot hold a worker thread for long.
+/// How long one frame may take to arrive in full before the connection is treated as broken.
+/// Generous for a loopback frame, short enough that a wedged client cannot hold a thread for long.
 const FRAME_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// The socket read timeout: just short enough to poll, so `read_frame` can enforce its own deadline
+/// identically on every platform.
+const FRAME_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// How long a connection may sit idle between commands before it is dropped. A client that keeps a
+/// socket for later `SEND`s is legitimate; one that never says anything again is not worth a thread
+/// forever, and five minutes is far longer than any human-paced use.
+const CONNECTION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -165,21 +174,94 @@ impl Daemon {
     }
 }
 
+/// Read one command line, tolerating idle time between commands.
+///
+/// `read_line` cannot be used directly: with a socket poll timeout it reports `WouldBlock` on an
+/// idle-but-healthy connection, and a partial line would already be appended to the buffer. Reading
+/// through `fill_buf` keeps that decision explicit — EOF is `None`, a timeout past
+/// `CONNECTION_IDLE_TIMEOUT` is an error, and anything else just waits.
+fn read_command(reader: &mut impl BufRead) -> Result<Option<String>, String> {
+    let deadline = std::time::Instant::now() + CONNECTION_IDLE_TIMEOUT;
+    let mut line = Vec::new();
+    loop {
+        let chunk = match reader.fill_buf() {
+            Ok(chunk) => chunk,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if std::time::Instant::now() >= deadline {
+                    return Err("connection idle for too long".to_string());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                continue;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e.to_string()),
+        };
+        if chunk.is_empty() {
+            return Ok(None); // the client hung up
+        }
+        match chunk.iter().position(|&b| b == b'\n') {
+            Some(end) => {
+                line.extend_from_slice(&chunk[..end]);
+                reader.consume(end + 1);
+                let text = String::from_utf8_lossy(&line)
+                    .trim_end_matches('\r')
+                    .to_string();
+                return Ok(Some(text));
+            }
+            None => {
+                let len = chunk.len();
+                line.extend_from_slice(chunk);
+                reader.consume(len);
+            }
+        }
+    }
+}
+
+/// Read exactly `n` bytes of a frame, or fail with a message that says what happened.
+///
+/// This is a hand-rolled loop rather than `read_exact` because a read timeout means different
+/// things on different systems: under BSD/macOS a socket timeout can surface as a short read or as
+/// `WouldBlock`, and the original `read_exact` turned both into a bare EOF that the client saw as
+/// "the daemon hung up". Here the timeout is a sleep-wait poll with our own deadline, so every
+/// platform produces the same error string, and a closed peer is reported as such.
+fn read_frame(reader: &mut impl BufRead, n: usize) -> Result<Vec<u8>, String> {
+    let deadline = std::time::Instant::now() + FRAME_READ_TIMEOUT;
+    let mut body = vec![0u8; n];
+    let mut filled = 0;
+    while filled < n {
+        match reader.read(&mut body[filled..]) {
+            Ok(0) => {
+                return Err(format!(
+                    "connection closed after {filled} of {n} bytes of message"
+                ))
+            }
+            Ok(read) => filled += read,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(format!(
+                        "timed out after {}s waiting for {n} bytes of message",
+                        FRAME_READ_TIMEOUT.as_secs()
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(format!("short message: {e}")),
+        }
+    }
+    Ok(body)
+}
+
 fn handle(stream: TcpStream, state: Arc<Mutex<State>>, allow_start: bool) -> Result<(), String> {
-    // A client that says "SEND 4096" and then stops sending would otherwise pin this thread in
-    // read_exact forever: the connection is one client, and a stalled one must not be able to
-    // exhaust the daemon. The timeout is per read call, so a slow but progressing sender is fine.
-    let _ = stream.set_read_timeout(Some(FRAME_READ_TIMEOUT));
+    // A client that says "SEND 4096" and then stops sending must not pin this thread: the socket
+    // timeout is the poll interval, and `read_frame` owns the real deadline.
+    let _ = stream.set_read_timeout(Some(FRAME_POLL));
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut writer = stream;
-    let mut line = String::new();
     loop {
-        line.clear();
-        let read = reader.read_line(&mut line).map_err(|e| e.to_string())?;
-        if read == 0 {
+        let Some(command) = read_command(&mut reader)? else {
             return Ok(()); // client hung up
-        }
-        let command = line.trim_end_matches(['\r', '\n']).to_string();
+        };
         let words: Vec<&str> = command.split_whitespace().collect();
         match words.as_slice() {
             ["SEND", count] => {
@@ -195,14 +277,7 @@ fn handle(stream: TcpStream, state: Arc<Mutex<State>>, allow_start: bool) -> Res
                             "message of {bytes} bytes is larger than the {MAX_MESSAGE_BYTES}-byte limit"
                         ));
                     }
-                    let mut body = vec![0u8; bytes];
-                    reader.read_exact(&mut body).map_err(|e| match e.kind() {
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => format!(
-                            "timed out after {}s waiting for {bytes} bytes of message",
-                            FRAME_READ_TIMEOUT.as_secs()
-                        ),
-                        _ => format!("short message: {e}"),
-                    })?;
+                    let body = read_frame(&mut reader, bytes)?;
                     Ok(String::from_utf8_lossy(&body).into_owned())
                 })();
                 let reply = match body {

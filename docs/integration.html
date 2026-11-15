@@ -241,6 +241,13 @@ cargo build --release --features gui
 pl() { plumb send "$*"; }                 <span class="c"># pl https://9fans.net</span>
 plf() { plumb send "$1:${2:-1}"; }        <span class="c"># plf src/main.rs 42</span>
 </code></pre>
+    <p>
+      В репозитории это уже написано: <code>contrib/shell/plumber.sh</code> (bash/zsh:
+      <code>pl</code>, <code>plf</code>, <code>plc</code>, <code>pll</code>),
+      <code>contrib/fish/plumber.fish</code>, <code>contrib/vim/plumb.vim</code> (команда
+      <code>:Plumb</code> и <code>&lt;leader&gt;p</code>) и <code>contrib/zed/tasks.json</code>
+      (задачи «plumb: отправить файл и строку» и «plumb: журнал»).
+    </p>
     <p>Из редактора — одна команда, и она не зависит от того, какой редактор у вас завтра:</p>
     <div class="tablewrap">
       <table>
@@ -262,6 +269,11 @@ plf() { plumb send "$1:${2:-1}"; }        <span class="c"># plf src/main.rs 42</
 plumber-open edit --cmd 'gvim +{line} {file}'
 plumber-open pdf  --cmd 'zathura -P {page} {file}'
 </code></pre>
+    <p>
+      Обратный путь — тоже одной командой, и её не надо писать заново для каждого инструмента:
+      <code>plumb send "$file:$line"</code>. Именно поэтому в репозитории лежит плагин на три
+      строки, а не по интеграции на каждый редактор.
+    </p>
   </div>
 </section>
 

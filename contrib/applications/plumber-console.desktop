@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=plumber console
+Name[ru]=Консоль plumber
+Comment=What the plumbing is doing: ports, journal, rules tester
+Comment[ru]=Что делает plumber: порты, журнал, проверка правил
+Exec=%h/.local/bin/plumber-console
+TryExec=%h/.local/bin/plumber-console
+Icon=utilities-system-monitor
+Terminal=false
+NoDisplay=false
+Categories=Utility;System;Development;
+Keywords=plumber;plumb;routes;rules;

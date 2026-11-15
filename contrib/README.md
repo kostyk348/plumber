@@ -56,6 +56,20 @@ xdg-mime default plumber-file.desktop x-scheme-handler/plumb
 
 Тогда `plumb://src/main.rs:42` в любом приложении открывается через правила.
 
+## Редакторы и оболочки
+
+- **vim/neovim**: `~/.vim/pack/plumber/start/plumb/plugin/plumb.vim` — команда `:Plumb`,
+  `<leader>p`, с настройкой `g:plumb_executable`.
+- **Zed**: `contrib/zed/tasks.json` в `~/.config/zed/tasks.json` (или в `.zed/tasks.json`
+  проекта) — задачи «plumb: отправить файл и строку» и «plumb: журнал».
+- **bash/zsh**: `contrib/shell/plumber.sh` — `pl`, `plf`, `plc`, `pll`.
+- **fish**: `contrib/fish/plumber.fish` — `pl`, `plf`, `pls`.
+
+## Консоль
+
+`contrib/applications/plumber-console.desktop` кладёт «Консоль plumber» в меню (нужен
+`~/.local/bin/plumber-console`, собранный с `--features gui`).
+
 ## Переменные
 
 - `PLUMBER_BIN` — каталог с бинарниками (по умолчанию `~/.local/bin`).

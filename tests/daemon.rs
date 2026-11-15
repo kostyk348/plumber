@@ -25,13 +25,16 @@ impl DaemonProcess {
         let rules_path = dir.join("plumbing");
         std::fs::write(&rules_path, rules).expect("write rules");
 
+        // stderr goes to a file rather than a pipe: a panicking daemon must not be able to fill a
+        // pipe and block, and a failing assertion can quote what the daemon said before it died.
+        let stderr = std::fs::File::create(dir.join("stderr.log")).expect("stderr log");
         let child = Command::new(env!("CARGO_BIN_EXE_plumberd"))
             .arg("--rules")
             .arg(&rules_path)
             .arg("--port-file")
             .arg(dir.join("port"))
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::from(stderr))
             .spawn()
             .expect("spawn plumberd");
         let process = Self { child, dir };
@@ -67,6 +70,29 @@ impl DaemonProcess {
         self.dir.join("plumbing")
     }
 
+    /// What the daemon wrote to stderr so far — a panicking daemon explains itself here, and a
+    /// silent EOF from the socket is otherwise indistinguishable from a crash.
+    fn stderr_tail(&self) -> String {
+        let text = std::fs::read_to_string(self.dir.join("stderr.log")).unwrap_or_default();
+        let tail: Vec<&str> = text.lines().rev().take(6).collect();
+        tail.into_iter().rev().collect::<Vec<_>>().join(" | ")
+    }
+
+    /// Alive means "answers PING on a fresh connection".
+    fn alive(&self) -> bool {
+        self.best_effort_request("PING").as_deref() == Some("PONG")
+    }
+
+    fn best_effort_request(&self, line: &str) -> Option<String> {
+        let mut stream = TcpStream::connect(("127.0.0.1", self.port())).ok()?;
+        stream.set_read_timeout(Some(Duration::from_secs(3))).ok()?;
+        writeln!(stream, "{line}").ok()?;
+        stream.flush().ok()?;
+        let mut reply = String::new();
+        BufReader::new(stream).read_line(&mut reply).ok()?;
+        Some(reply.trim_end().to_string())
+    }
+
     /// One request line in, one reply line out, on a fresh connection.
     fn request(&self, line: &str) -> String {
         let mut stream = TcpStream::connect(("127.0.0.1", self.port())).expect("connect");
@@ -91,6 +117,25 @@ impl DaemonProcess {
 
     /// Send raw bytes and read whatever the daemon answers (a misbehaving client's view).
     fn raw(&self, payload: &[u8]) -> String {
+        let reply = self.raw_quiet(payload);
+        if reply.is_empty() {
+            // An empty line means the daemon closed without answering. Say whether it is still
+            // healthy and quote its stderr, so the next reader of this failure has the reason
+            // instead of guessing.
+            let why = if self.alive() {
+                "daemon is still healthy (PING answered)".to_string()
+            } else {
+                "daemon is gone".to_string()
+            };
+            panic!(
+                "no answer to a raw frame: {why}; stderr: {}",
+                self.stderr_tail()
+            );
+        }
+        reply
+    }
+
+    fn raw_quiet(&self, payload: &[u8]) -> String {
         let mut stream = TcpStream::connect(("127.0.0.1", self.port())).expect("connect");
         stream.write_all(payload).expect("write raw");
         stream.flush().expect("flush");

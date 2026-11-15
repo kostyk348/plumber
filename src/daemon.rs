@@ -38,6 +38,7 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
+use crate::journal::{Entry, Journal};
 use crate::message::Message;
 use crate::rules::Rules;
 
@@ -73,6 +74,8 @@ struct State {
     readers: HashMap<String, Vec<Sender<Message>>>,
     /// Messages held for a port nobody is reading yet (`plumb client`).
     held: HashMap<String, Vec<Message>>,
+    /// What went through the daemon recently — read by `plumb log` and the console.
+    journal: Journal,
 }
 
 impl State {
@@ -126,6 +129,7 @@ impl Daemon {
             readers.insert(port.clone(), Vec::new());
         }
         let state = State {
+            journal: Journal::new(),
             rules,
             rules_text: text,
             rules_mtime: mtime,
@@ -328,6 +332,48 @@ fn handle(stream: TcpStream, state: Arc<Mutex<State>>, allow_start: bool) -> Res
                 // complete. Leaving it open makes `read_to_string` wait forever.
                 return Ok(());
             }
+            // The journal, one JSON object per line, then the connection closes (like RULES).
+            // `EVENTS` = the most recent 50; `EVENTS 200` = the last 200; `EVENTS AFTER 41` = the
+            // entries a follower has not seen yet.
+            ["EVENTS"] | ["EVENTS", _] | ["EVENTS", _, _] => {
+                let state = state.lock().map_err(|e| e.to_string())?;
+                let entries: Vec<String> = match words.as_slice() {
+                    ["EVENTS", "AFTER", seq] => match seq.parse::<u64>() {
+                        Ok(after) => state
+                            .journal
+                            .after(after)
+                            .iter()
+                            .map(|e| e.to_json())
+                            .collect(),
+                        Err(_) => {
+                            writeln!(writer, "ERR EVENTS AFTER needs a number, got {seq:?}")
+                                .map_err(|e| e.to_string())?;
+                            writer.flush().map_err(|e| e.to_string())?;
+                            return Ok(());
+                        }
+                    },
+                    ["EVENTS", count] => match count.parse::<usize>() {
+                        Ok(limit) => state
+                            .journal
+                            .tail(limit)
+                            .iter()
+                            .map(|e| e.to_json())
+                            .collect(),
+                        Err(_) => {
+                            writeln!(writer, "ERR EVENTS needs a count, got {count:?}")
+                                .map_err(|e| e.to_string())?;
+                            writer.flush().map_err(|e| e.to_string())?;
+                            return Ok(());
+                        }
+                    },
+                    _ => state.journal.tail(50).iter().map(|e| e.to_json()).collect(),
+                };
+                for line in entries {
+                    writeln!(writer, "{line}").map_err(|e| e.to_string())?;
+                }
+                writer.flush().map_err(|e| e.to_string())?;
+                return Ok(());
+            }
             ["RULES"] => {
                 let state = state.lock().map_err(|e| e.to_string())?;
                 writer
@@ -364,12 +410,57 @@ fn send(state: &Arc<Mutex<State>>, wire: &str, allow_start: bool) -> String {
         Err(e) => return format!("ERR {e}"),
     };
     state.reload_if_changed();
+    route_message(&mut state, message, allow_start)
+}
+
+/// Apply the rules to one message, deliver it, and write down what happened.
+fn route_message(state: &mut State, message: Message, allow_start: bool) -> String {
+    let seq = state.journal.next_seq();
     let route = state.rules.route(&message);
+    // Read everything the journal needs before `dispatch` takes the route by value.
+    let rule_line = route.rule_line;
+    let dst_after_rules = route.message.dst.clone();
+    let data = Entry::truncate(&route.message.data, 200);
+    let attr = route
+        .message
+        .attr
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let kind = message.kind.clone();
+    let verdict = dispatch(state, route, allow_start);
+    let dst = if dst_after_rules.is_empty() {
+        // Nothing matched: the port is whatever the verdict says, if it says anything.
+        verdict
+            .strip_prefix("OK ")
+            .and_then(|rest| rest.split(' ').next())
+            .unwrap_or("")
+            .to_string()
+    } else {
+        dst_after_rules
+    };
+    state.journal.record(Entry {
+        seq,
+        at: now_seconds(),
+        src: message.src,
+        dst,
+        data,
+        attr,
+        kind,
+        rule: rule_line,
+        verdict: verdict.clone(),
+    });
+    verdict
+}
+
+/// The delivery logic itself: what the rules decided, and the answer the sender gets.
+fn dispatch(state: &mut State, route: crate::rules::Route, allow_start: bool) -> String {
     if !route.matched() {
         // plumb(6): no rule set fired, so the message is discarded unless it names an existing port.
         let named = route.message.dst.clone();
         if !named.is_empty() && state.readers.contains_key(&named) {
-            deliver(&mut state, &named, route.message);
+            deliver(state, &named, route.message);
             return format!("OK {named}");
         }
         return "ERR no rule matched this message".to_string();
@@ -410,11 +501,20 @@ fn send(state: &Arc<Mutex<State>>, wire: &str, allow_start: bool) -> String {
                     "ERR no reader on port {port} and the rule names no client or start"
                 );
             }
-            deliver(&mut state, &port, route.message);
+            deliver(state, &port, route.message);
             format!("OK {port}")
         }
         None => "ERR the rule set has no `plumb to`".to_string(),
     }
+}
+
+/// Wall-clock seconds with a fractional part, for the journal. `SystemTime` cannot be formatted
+/// without a dependency, and the journal is the only consumer.
+fn now_seconds() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 fn deliver(state: &mut State, port: &str, message: Message) {

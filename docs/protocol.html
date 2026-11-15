@@ -47,6 +47,7 @@
           <tr><td><code>READ порт</code></td><td>поток сообщений</td><td>подписаться на порт; дальше в соединение идут сообщения с длиной перед каждым</td></tr>
           <tr><td><code>PORTS</code></td><td><code>порт N</code> на строку</td><td>порты из правил и число читателей на каждом</td></tr>
           <tr><td><code>RULES</code></td><td>текст файла правил</td><td>что демон на самом деле разбирает сейчас</td></tr>
+          <tr><td><code>EVENTS</code></td><td>строки JSON</td><td>журнал: последние 50 сообщений с вердиктом; <code>EVENTS 200</code> — последние 200, <code>EVENTS AFTER 41</code> — новее 41-й записи</td></tr>
           <tr><td><code>PING</code></td><td><code>PONG</code></td><td>жив ли</td></tr>
         </tbody>
       </table>
@@ -142,7 +143,21 @@ for message in frames(s):
 <pre><code>plumb send &lt;text&gt; [--src NAME] [--type text] [--wdir DIR] [--port N]
 plumb read &lt;port&gt; [--port N]
 plumb rules | plumb ports [--port N]
+plumb log [-n N] [--follow] [--json] [--port N]   <span class="c"># что видел демон</span>
 plumb test --rules FILE &lt;text&gt; [--wdir DIR]      <span class="c"># без демона</span>
+</code></pre>
+<h3>Журнал</h3>
+<p>
+  Демон помнит последние 500 сообщений: кто отправил, что было в данных, какое правило
+  сработало и что получил клиент в ответ. Это не лог-файл, а окно в работу правил:
+</p>
+<pre><code>$ plumb log -n 3
+17:16:40  OK edit                      plumb: /home/you/project/src/open.rs (правило, строка 22)
+17:16:40  OK web                       plumb: https://9fans.net (правило, строка 46)
+17:16:40  ERR no rule matched this message plumb: абракадабра
+
+$ plumb log --follow                 <span class="c"># живой хвост, для второго окна</span>
+$ plumb log --json                   <span class="c"># то же машинно-читаемо, по строке JSON</span>
 </code></pre>
     <h3><code>plumber-open</code></h3>
 <pre><code>plumber-open &lt;port&gt; [--cmd 'ШАБЛОН'] [--port N] [--dry-run] [--once]

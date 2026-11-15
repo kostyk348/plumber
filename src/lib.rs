@@ -25,11 +25,13 @@
 //!   process is not a thing you want to require from a text editor.
 
 pub mod daemon;
+pub mod journal;
 pub mod message;
 pub mod open;
 pub mod rules;
 
 pub use daemon::{Config, Daemon};
+pub use journal::{Entry, Journal};
 pub use message::Message;
 pub use open::open;
 pub use rules::{Action, Route, Rules};

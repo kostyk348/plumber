@@ -311,6 +311,82 @@ fn daemon_binary_picks_up_a_changed_rules_file() {
 }
 
 #[test]
+fn the_journal_records_what_went_through() {
+    let daemon = DaemonProcess::start(EDIT_RULE);
+    let mut reader = daemon.reader("edit");
+    daemon.send(&Message::new("test", "text", "src/main.rs:42"));
+    // Drain the reader so the delivery is not left pending in the channel.
+    let _ = read_message(&mut reader);
+
+    let events = daemon.request_all("EVENTS");
+    let lines: Vec<&str> = events.lines().filter(|l| l.starts_with('{')).collect();
+    assert_eq!(lines.len(), 1, "one message, one entry: {events:?}");
+    let line = lines[0];
+    assert!(line.contains("\"dst\":\"edit\""), "{line}");
+    assert!(line.contains("\"verdict\":\"OK edit\""), "{line}");
+    assert!(
+        line.contains("\"rule\":1"),
+        "the rule set is recorded by its first line: {line}"
+    );
+    assert!(line.contains("\"data\":\"src/main.rs:42\""), "{line}");
+}
+
+#[test]
+fn the_journal_answers_a_follower_only_with_new_entries() {
+    let daemon = DaemonProcess::start(EDIT_RULE);
+    let mut reader = daemon.reader("edit");
+    daemon.send(&Message::new("test", "text", "src/main.rs:1"));
+    let _ = read_message(&mut reader);
+    // An entry that did not match is recorded too, with the reason.
+    daemon.send(&Message::new("test", "text", "no address here"));
+
+    let all = daemon.request_all("EVENTS 10");
+    let seqs: Vec<u64> = all
+        .lines()
+        .filter_map(|line| {
+            line.find("\"seq\":").map(|i| {
+                let rest = &line[i + 6..];
+                let end = rest
+                    .find(|c: char| !c.is_ascii_digit())
+                    .unwrap_or(rest.len());
+                rest[..end].parse().unwrap()
+            })
+        })
+        .collect();
+    assert_eq!(seqs.len(), 2, "two messages: {all:?}");
+    assert!(
+        all.contains("no rule matched"),
+        "the failure is recorded: {all}"
+    );
+
+    let newer = daemon.request_all(&format!("EVENTS AFTER {}", seqs[0]));
+    assert_eq!(newer.lines().filter(|l| l.starts_with('{')).count(), 1);
+    assert!(
+        !newer.contains("src/main.rs:1"),
+        "the first entry is not repeated"
+    );
+
+    assert!(!daemon
+        .request_all(&format!("EVENTS AFTER {}", seqs[1]))
+        .contains('{'));
+}
+
+#[test]
+fn the_journal_refuses_a_nonsense_argument() {
+    let daemon = DaemonProcess::start(EDIT_RULE);
+    let reply = daemon.request_all("EVENTS AFTER nonsense");
+    assert!(
+        reply.starts_with("ERR EVENTS AFTER needs a number"),
+        "got {reply:?}"
+    );
+    let reply = daemon.request_all("EVENTS lots");
+    assert!(
+        reply.starts_with("ERR EVENTS needs a count"),
+        "got {reply:?}"
+    );
+}
+
+#[test]
 fn daemon_binary_rejects_an_unknown_command() {
     let daemon = DaemonProcess::start(EDIT_RULE);
     let reply = daemon.request("FROBNICATE");

@@ -3,6 +3,28 @@
 All notable changes to this project. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the version numbers are [SemVer](https://semver.org/).
 
+## [0.4.0] — 2026-11-15
+
+### Added
+
+- **The daemon keeps a journal.** The last 500 messages: source, data, attributes, the rule set that
+  fired and the verdict the sender received. `EVENTS`, `EVENTS n` and `EVENTS AFTER seq` on the
+  protocol; one JSON object per line, escaped by hand so the crate keeps its single dependency.
+- **`plumb log`** — `-n N`, `--follow` and `--json`. A failed send is in the journal with its reason,
+  which turns "the rules are a black box" into something you can operate.
+- **`plumber-console`**, a GUI built with egui behind the optional `gui` feature: daemon status and
+  port, ports with reader counts, the live journal with colour-coded verdicts, a form to send a
+  message, and a rules editor with a tester that runs the daemon's own parser — so what it shows is
+  what would happen. The core stays dependency-free: a headless machine never builds a windowing
+  stack.
+- Seven unit tests for the journal (ring behaviour, `AFTER`, JSON escaping, truncation by characters)
+  and three end-to-end tests over the socket; fifty in total.
+
+### Changed
+
+- The journal is bounded and truncates `data` at 200 characters: it exists to be watched, not to be
+  an archive.
+
 ## [0.3.0] — 2026-10-24
 
 ### Added

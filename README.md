@@ -131,7 +131,7 @@ output — only what the output is. That is the whole trick, and it is forty yea
 cargo test
 ```
 
-Forty tests, no mocks, and the CI runs them on Linux, Windows and macOS.
+Fifty tests, no mocks, and the CI runs them on Linux, Windows and macOS.
 
 Of the rules and the daemon (13): the wire format round-trips (including data with newlines), the
 first rule set wins, an unmatched message is refused to the sender, an existing path is rewritten to
@@ -157,6 +157,43 @@ the rules, routes a message to a real reader with its attributes, explains an un
 an unread port, reloads a changed rules file, answers malformed frames instead of hanging up, refuses
 an absurd frame size, answers a frame the client cut short (half-closed socket), and rejects an
 unknown command — each test starting the actual `plumberd`.
+
+## Watching it work
+
+The daemon keeps a journal of the last 500 messages — who sent what, which rule set fired, and the
+verdict the sender got. Three ways to read it:
+
+```sh
+plumb log -n 20          # formatted: time, verdict, source, data, rule line
+plumb log --follow       # a live tail, for a second terminal
+plumb log --json         # one JSON object per line, for a program
+```
+
+And a window, for when a terminal is not the right shape:
+
+```sh
+cargo build --release --features gui
+./target/release/plumber-console
+```
+
+![plumber-console](docs/assets/console.png)
+
+The console shows the daemon's status and port, the ports with their reader counts, the live
+journal, a box to send a message, and an editor for the rules file with a **rule tester** that runs
+the same `Rules::parse` + `route` the daemon runs — so "green in the console" means "the daemon will
+do exactly that". The GUI is an optional feature: the library and the three CLI binaries stay
+dependency-free apart from the regex crate.
+
+## Protocol
+
+| command | answer | meaning |
+|---|---|---|
+| `SEND n` | `OK port` / `ERR reason` | `n` bytes of message follow; the rules decide |
+| `READ port` | a stream of messages | subscribe to a port |
+| `PORTS` | `port count` per line | which ports exist, how many readers each has |
+| `RULES` | the rules text | what the daemon is actually running |
+| `EVENTS [n]`, `EVENTS AFTER seq` | one JSON object per line | the journal, for tails and tools |
+| `PING` | `PONG` | alive |
 
 ## Installing into a desktop
 

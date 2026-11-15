@@ -26,6 +26,7 @@ fn main() {
         "read" => read(rest),
         "rules" => request(rest, "RULES"),
         "ports" => request(rest, "PORTS"),
+        "log" => log(rest),
         "test" => test(rest),
         "--help" | "-h" | "help" => {
             usage();
@@ -45,6 +46,7 @@ fn usage() {
          plumb send <text> [--src NAME] [--type text] [--wdir DIR] [--port N]\n  \
          plumb read <port> [--port N]\n  \
          plumb rules | plumb ports [--port N]\n  \
+         plumb log [-n N] [--follow] [--json] [--port N]   (what the daemon saw)\n  \
          plumb test --rules FILE <text> [--wdir DIR]   (dry run, no daemon)"
     );
 }
@@ -181,6 +183,135 @@ fn request(args: &[String], command: &str) -> Result<(), String> {
 
 /// Dry run: what would the rules do with this text? No daemon, no delivery — the fastest way to
 /// debug a plumbing file.
+/// `plumb log` — read the daemon's journal.
+///
+/// `--follow` polls with `EVENTS AFTER <seq>`: the daemon closes after every answer (the protocol
+/// has no long-lived subscribe), so the client keeps its own place in the stream.
+fn log(args: &[String]) -> Result<(), String> {
+    let json = args.iter().any(|a| a == "--json");
+    let follow = args.iter().any(|a| a == "--follow" || a == "-f");
+    let limit: usize = match flag(args, "-n").or_else(|| flag(args, "--lines")) {
+        Some(n) => n.parse().map_err(|_| format!("bad -n {n:?}"))?,
+        None => 50,
+    };
+    let mut seen: Option<u64> = None;
+    let mut first = true;
+    loop {
+        let request = match seen {
+            None if !follow => format!("EVENTS {limit}"),
+            // Follow starts from the newest `limit` entries so the screen is not empty.
+            None => format!("EVENTS {limit}"),
+            Some(seq) => format!("EVENTS AFTER {seq}"),
+        };
+        let lines = request_lines(args, &request)?;
+        for line in &lines {
+            if line.starts_with("ERR ") {
+                return Err(line.clone());
+            }
+            seen = Some(json_field_u64(line, "seq").unwrap_or(0));
+            if json {
+                println!("{line}");
+            } else {
+                println!("{}", format_entry(line));
+            }
+        }
+        if !follow {
+            if first && lines.is_empty() {
+                eprintln!("plumb: журнал пуст — демон ещё ничего не получал");
+            }
+            return Ok(());
+        }
+        first = false;
+        // Keep `seen` at the newest entry; on the first pass with nothing, ask for everything.
+        if seen.is_none() {
+            seen = Some(0);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(700));
+    }
+}
+
+/// One request that answers with lines and then closes (RULES, PORTS, EVENTS).
+fn request_lines(args: &[String], request: &str) -> Result<Vec<String>, String> {
+    let mut stream = connect(args)?;
+    writeln!(stream, "{request}").map_err(|e| e.to_string())?;
+    stream.flush().map_err(|e| e.to_string())?;
+    let reader = BufReader::new(stream);
+    Ok(reader.lines().map_while(Result::ok).collect())
+}
+
+/// A number from a flat JSON object written by the daemon: `"seq":12`.
+fn json_field_u64(line: &str, name: &str) -> Option<u64> {
+    let key = format!("\"{name}\":");
+    let start = line.find(&key)? + key.len();
+    let rest = &line[start..];
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+/// A string field from the same flat JSON, unescaped enough for a terminal.
+fn json_field_str(line: &str, name: &str) -> Option<String> {
+    let key = format!("\"{name}\":\"");
+    let start = line.find(&key)? + key.len();
+    let mut out = String::new();
+    let mut chars = line[start..].chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                'r' => out.push('\r'),
+                'u' => {
+                    let hex: String = chars.by_ref().take(4).collect();
+                    if let Ok(code) = u32::from_str_radix(&hex, 16) {
+                        if let Some(c) = char::from_u32(code) {
+                            out.push(c);
+                        }
+                    }
+                }
+                other => out.push(other),
+            },
+            c => out.push(c),
+        }
+    }
+    None
+}
+
+/// Render one journal entry for a terminal: time, verdict, source, data.
+fn format_entry(line: &str) -> String {
+    let at = line
+        .find("\"at\":")
+        .and_then(|i| {
+            let rest = &line[i + 5..];
+            rest.find(|c: char| !c.is_ascii_digit() && c != '.')
+                .map(|end| rest[..end].trim_end_matches('.').to_string())
+        })
+        .and_then(|s| s.parse::<f64>().ok());
+    let stamp = match at {
+        Some(seconds) => {
+            let total = seconds as u64;
+            format!(
+                "{:02}:{:02}:{:02}",
+                (total / 3600) % 24,
+                (total / 60) % 60,
+                total % 60
+            )
+        }
+        None => "--:--:--".to_string(),
+    };
+    let verdict = json_field_str(line, "verdict").unwrap_or_default();
+    let src = json_field_str(line, "src").unwrap_or_default();
+    let data = json_field_str(line, "data").unwrap_or_default();
+    let rule = json_field_u64(line, "rule");
+    let rule = match rule {
+        Some(n) => format!(" (правило, строка {n})"),
+        None => String::new(),
+    };
+    format!("{stamp}  {verdict:<28} {src}: {data}{rule}")
+}
+
 fn test(args: &[String]) -> Result<(), String> {
     let path = flag(args, "--rules").ok_or("test needs --rules FILE")?;
     let wdir = flag(args, "--wdir")

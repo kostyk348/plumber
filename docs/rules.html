@@ -155,6 +155,21 @@ attr add addr=$2
 plumb to edit
 </code></pre>
 
+    <h3>Голое имя файла (без слэша)</h3>
+    <p>
+      <code>Cargo.toml</code> — существующий файл, но в нём нет ни одного <code>/</code>, поэтому
+      правило выше его не поймает, а правило доменов — поймает: <code>.toml</code> выглядит как
+      зона. Это правило ставится <b>выше</b> доменов, и <code>arg isfile</code> оставляет
+      <code>example.com</code> в покое.
+    </p>
+<pre><code>type is text
+data matches '^([.a-zA-Z0-9_+\-]+\.[a-zA-Z0-9]+)('$addr')?$'
+arg isfile $1
+data set $file
+attr add addr=$2
+plumb to edit
+</code></pre>
+
     <h3>Ссылка → браузер</h3>
 <pre><code>type is text
 data matches '^(https?|ftp)://'
@@ -234,7 +249,7 @@ port: web
 $ plumb test --rules plumbing "просто текст"
 no rule matched: this message would be discarded
 </code></pre>
-    <h3>Три грабли, на которые наступают все</h3>
+    <h3>Четыре грабли, на которые наступают все</h3>
     <ol>
       <li>
         <b>Правило с <code>isfile</code> не сработает на несуществующий файл.</b>
@@ -250,7 +265,26 @@ no rule matched: this message would be discarded
         <b>Пустой захват даёт пустой атрибут.</b> На <code>src/main.rs</code> без номера строки
         получится <code>addr=</code>; читатель должен это терпеть (наш — терпит).
       </li>
+      <li>
+        <b>Макрос со скобками съедает нумерацию захватов.</b> Это самая коварная: макрос
+        раскрывается <i>в текст регулярного выражения</i>, поэтому
+        <code>addr=':([0-9]+)'</code> добавляет в вашу регулярку свою группу. В правиле
+        <code>data matches '([a-z]+(/[a-z]+)+)('$addr')?'</code> группа <code>([a-z]+(/[a-z]+)+)</code>
+        содержит ещё и внутреннюю <code>(/[a-z]+)</code> — и <code>$2</code> указывает уже на неё, а
+        не на адрес. Проверка занимает секунду:
+      </li>
     </ol>
+<pre><code>$ plumb test --rules plumbing "src/open.rs:60"
+…
+addr=/open.rs          <span class="c"># ← вот это $2: внутренняя группа, а не «:60»</span>
+21
+src/open.rs
+</code></pre>
+    <p>
+      Лечится одной привычкой: <b>свои вложенные группы пишите как <code>(?:…)</code></b>, тогда
+      <code>$1</code>, <code>$2</code>, … считаются только там, где вы этого ждёте, и макросы
+      остаются безопасными.
+    </p>
     <p>
       Пустой вывод при непустом файле правил почти всегда значит одно: набор развалился на лишней
       пустой строке или комментарии посередине. <code>plumb rules</code> (через демон) покажет,

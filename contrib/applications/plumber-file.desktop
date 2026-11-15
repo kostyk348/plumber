@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Open with plumber
+Name[ru]=Открыть через plumber
+Comment=Let the plumbing rules decide what to do with this file or link
+Comment[ru]=Правила plumber решают, что делать с этим файлом или ссылкой
+Exec=%h/.local/bin/plumb-file %F
+TryExec=%h/.local/bin/plumb-file
+Icon=utilities-terminal
+Terminal=false
+NoDisplay=false
+Categories=Utility;
+MimeType=text/plain;text/markdown;text/x-rust;text/x-python;application/pdf;x-scheme-handler/plumb;

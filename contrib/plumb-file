@@ -1,0 +1,71 @@
+#!/bin/sh
+# plumb-file — «Открыть с помощью plumber» для файлового менеджера и xdg-open.
+#
+# Отдаёт путь правилам (plumb send), а если правила не взялись — открывает файл
+# напрямую. Так двойной клик и строка из лога идут одним маршрутом, но десктоп не
+# ломается, когда демона нет.
+#
+#   plumb-file <файл> [файл…]      # из ярлыка: %F
+#   plumb-file plumb://<текст>     # из ссылки:  %u
+#
+# ЛОВУШКА: этот ярлык может оказаться обработчиком по умолчанию для text/plain.
+# Тогда откат через `xdg-open` вызвал бы сам себя — петля. Поэтому:
+#   1) PLUMB_FILE_ACTIVE=1 выставляется перед вызовом xdg-open, и повторный вход
+#      сразу идёт в «открыть напрямую», минуя правила и xdg-open;
+#   2) «напрямую» — это конкретная программа, а не xdg-open.
+
+set -u
+BIN="${PLUMBER_BIN:-$HOME/.local/bin}"
+
+open_directly() {
+    target="$1"
+    case "$target" in
+        *.pdf)
+            for prog in zathura okular evince atril; do
+                command -v "$prog" >/dev/null 2>&1 && { "$prog" "$target" >/dev/null 2>&1 & return 0; }
+            done
+            ;;
+    esac
+    for prog in zed micro xed kate; do
+        command -v "$prog" >/dev/null 2>&1 && { "$prog" "$target" >/dev/null 2>&1 & return 0; }
+    done
+    if command -v vim >/dev/null 2>&1 && command -v x-terminal-emulator >/dev/null 2>&1; then
+        x-terminal-emulator -e vim "$target" >/dev/null 2>&1 &
+        return 0
+    fi
+    return 1
+}
+
+fallback() {
+    if [ "${PLUMB_FILE_ACTIVE:-0}" = "1" ]; then
+        open_directly "$1" && return 0
+        PLUMB_FILE_ACTIVE=1 xdg-open "$1" >/dev/null 2>&1 &
+        return 0
+    fi
+    PLUMB_FILE_ACTIVE=1 xdg-open "$1" >/dev/null 2>&1 &
+}
+
+[ $# -eq 0 ] && { echo "usage: plumb-file <file|plumb://text> …" >&2; exit 2; }
+
+for arg in "$@"; do
+    case "$arg" in
+        plumb://*) text="${arg#plumb://}" ;;
+        file://*)  text="${arg#file://}" ;;
+        *)         text="$arg" ;;
+    esac
+
+    if [ "${PLUMB_FILE_ACTIVE:-0}" = "1" ]; then
+        open_directly "$arg" || true
+        continue
+    fi
+
+    if out="$("$BIN/plumb" send "$text" 2>&1)"; then
+        : # правило сработало, дальше всё делает читатель порта
+    else
+        case "$out" in
+            *"no rule matched"*|*"no reader on port"*|*"cannot reach the plumber"*)
+                fallback "$arg" ;;
+            *) echo "$out" >&2; fallback "$arg" ;;
+        esac
+    fi
+done

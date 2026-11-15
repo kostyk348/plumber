@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=plumber
+Comment=Start the plumber daemon and its port readers
+Comment[ru]=Демон plumber и читатели портов
+Exec=%h/.local/bin/plumber-session start
+Icon=utilities-terminal
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

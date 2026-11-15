@@ -75,7 +75,61 @@ systemctl --user is-active plumber      <span class="c"># active</span>
 
 <section>
   <div class="wrap">
-    <h2>2. Файл правил — в вашем конфиге, а не в проекте</h2>
+    <h2>1b. Если systemd нет: автозапуск через XDG</h2>
+    <p>
+      Не на всякой машине есть <code>systemd --user</code> — бывает OpenRC, <code>dinit</code>, или
+      просто «нужен работающий демон в графической сессии». Универсальный путь — XDG autostart:
+      его читают Cinnamon, GNOME, KDE, XFCE и почти всё остальное.
+    </p>
+<pre><code><span class="c"># contrib/autostart/plumber-session.desktop</span>
+[Desktop Entry]
+Type=Application
+Name=plumber
+Exec=%h/.local/bin/plumber-session start
+Terminal=false
+NoDisplay=true
+</code></pre>
+    <p>
+      <code>plumber-session</code> — сценарий из <code>contrib/</code>: поднимает демон, дожидается
+      файла порта и запускает читателей; он же умеет <code>stop</code>, <code>restart</code> и
+      <code>status</code>. Логи — в <code>~/.local/state/plumber/</code>. Проверить, что автозапуск
+      подхватился, можно без перезахода в сессию:
+    </p>
+<pre><code>plumber-session start
+plumber-session status
+<span class="c"># демон: порт 33121</span>
+<span class="c">#   порт edit 1</span>
+<span class="c">#   порт web 1</span>
+<span class="c"># читатель edit: жив (pid 15512)</span>
+</code></pre>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>2. Читатели должны жить постоянно</h2>
+    <p>
+      Демон — половина системы. Вторая половина — постоянные читатели портов: без них
+      <code>plumb send</code> отвечает <code>ERR no reader on port edit</code>, и всё выглядит
+      сломанным, хотя правила сработали правильно. Поэтому в автозапуске рядом с демоном живут
+      три цикла:
+    </p>
+<pre><code>while :; do plumber-open edit; sleep 2; done   <span class="c"># редактор</span>
+while :; do plumber-open web;  sleep 2; done   <span class="c"># браузер</span>
+while :; do plumber-open pdf;  sleep 2; done   <span class="c"># просмотрщик PDF</span>
+</code></pre>
+    <div class="note">
+      Перезапуск в цикле нужен из-за перезапуска демона: соединение читателя обрывается вместе с
+      ним, а <code>sleep 2</code> не даёт крутиться вхолостую, если демона нет вовсе. Порт, у
+      которого нет программы (например <code>catalog</code>, пока каталога нет), лучше не держать:
+      читатель без опенера только пишет ошибки в лог.
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>2b. Файл правил — в вашем конфиге, а не в проекте</h2>
     <p>
       Правила — это политика машины: что считать ссылкой, чем открывать PDF, куда идёт номер
       детали. Поэтому они лежат в <code>~/.config/plumber/plumbing</code>, а не в репозитории
@@ -116,27 +170,40 @@ plumb to edit
       умеет запускать программу по MIME-типу, а программа — просто отправить путь в
       <code>plumb</code>. Тогда двойной клик и строка из лога идут одним маршрутом.
     </p>
-    <p>Ярлык обработчика — обычный <code>.desktop</code>:</p>
-<pre><code><span class="c"># ~/.local/share/applications/plumber-file.desktop</span>
+    <p>
+      Ярлык обработчика — обычный <code>.desktop</code>, а команда — маленький сценарий
+      <code>plumb-file</code> (тоже из <code>contrib/</code>): он отдаёт путь правилам и, если правил на такой путь нет или демон
+      не запущен, открывает файл напрямую. Иначе получается обработчик, который ломается ровно
+      тогда, когда демона нет.
+    </p>
+<pre><code><span class="c"># contrib/applications/plumber-file.desktop</span>
 [Desktop Entry]
 Type=Application
-Name=Открыть через plumber
-Exec=plumber-open edit --cmd 'xdg-open {file}'
-MimeType=text/plain;text/x-python;text/x-rust;text/markdown;
+Name=Open with plumber
+Exec=%h/.local/bin/plumb-file %F
+MimeType=text/plain;text/markdown;application/pdf;x-scheme-handler/plumb;
 NoDisplay=false
 Terminal=false
 </code></pre>
 <pre><code>update-desktop-database ~/.local/share/applications
-xdg-mime default plumber-file.desktop text/plain
-xdg-mime query default text/plain      <span class="c"># plumber-file.desktop</span>
+
+<span class="c"># ссылки plumb://… открываются через правила — это безопасно: других претендентов нет</span>
+xdg-mime default plumber-file.desktop x-scheme-handler/plumb
 </code></pre>
     <div class="note warn">
-      Назначать <code>plumber</code> обработчиком по умолчанию для всех текстовых файлов — на
-      любителя: если демон не запущен, файл не откроется вовсе. Разумнее оставить системный
-      обработчик и добавить plumber как вариант в меню «Открыть с помощью», а по умолчанию ставить
-      только для тех типов, где правила действительно знают больше файлового менеджера —
-      например <code>application/x-plumb</code> для ваших собственных ссылок.
+      <b>Петля, в которую легко попасть.</b> Если поставить <code>plumb-file</code> обработчиком по
+      умолчанию для <code>text/plain</code>, его собственный откат через <code>xdg-open</code>
+      вызовет <i>его же</i> — бесконечная рекурсия при выключенном демоне. Защита в две строки:
+      переменная <code>PLUMB_FILE_ACTIVE=1</code> перед вызовом <code>xdg-open</code> и прямой
+      выбор программы (тот же редактор) при повторном входе. Без этого правила «на уровне системы»
+      опаснее, чем полезнее.
     </div>
+    <p>
+      Поэтому разумная настройка такая: <code>plumber-file</code> — вариант в меню «Открыть с
+      помощью» и обработчик <code>plumb://</code>, а умолчания для обычных типов остаются у
+      нормальных приложений. Правила всё равно участвуют: строки из логов, ссылки и адреса идут
+      через <code>plumb send</code>, а не через ассоциации файлов.
+    </p>
   </div>
 </section>
 

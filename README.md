@@ -158,6 +158,14 @@ an unread port, reloads a changed rules file, answers malformed frames instead o
 an absurd frame size, answers a frame the client cut short (half-closed socket), and rejects an
 unknown command — each test starting the actual `plumberd`.
 
+## Installing into a desktop
+
+`contrib/` holds what "install and it works" needs and the library itself does not: a
+`plumber-session` script (daemon plus long-lived port readers), an XDG autostart entry, a
+`systemd --user` unit, a `plumb-file` MIME handler with a recursion guard, and fish wrappers. One
+`contrib/README.md` walks through it — the daemon is only half the system; the readers are the other
+half, and without them `plumb send` answers `no reader on port`.
+
 ## Website
 
 [`kostyk348.github.io/plumber`](https://kostyk348.github.io/plumber/) — the manual: install, the rules

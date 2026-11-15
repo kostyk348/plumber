@@ -1,0 +1,105 @@
+#!/bin/sh
+# plumber-session — поднимает демон plumber и постоянных читателей портов.
+#
+# Демон — половина системы; вторая половина — читатели. Без них `plumb send`
+# отвечает «no reader on port», и интеграция выглядит сломанной.
+#
+#   plumber-session start | stop | restart | status
+#
+# Ставится в ~/.local/bin, запускается из автозапуска (см. contrib/autostart).
+
+set -u
+
+BIN="${PLUMBER_BIN:-$HOME/.local/bin}"
+RULES="${PLUMBER_RULES:-$HOME/.config/plumber/plumbing}"
+PORT_FILE="$HOME/.plumber/port"
+STATE="$HOME/.local/state/plumber"
+PORTS="${PLUMBER_PORTS:-edit web pdf}"
+# Дополнительные флаги демона (например --allow-start). Разбиение на слова здесь нужно.
+DAEMON_FLAGS="${PLUMBER_DAEMON_FLAGS:-}"
+
+mkdir -p "$STATE"
+
+daemon_alive() {
+    [ -f "$PORT_FILE" ] || return 1
+    "$BIN/plumb" ports >/dev/null 2>&1
+}
+
+start_daemon() {
+    if daemon_alive; then
+        echo "демон уже работает (порт $(cat "$PORT_FILE"))"
+        return 0
+    fi
+    [ -f "$RULES" ] || { echo "нет файла правил: $RULES" >&2; return 1; }
+    # shellcheck disable=SC2086  # разбиение на слова — часть замысла
+    setsid "$BIN/plumberd" --rules "$RULES" $DAEMON_FLAGS \
+        >>"$STATE/plumberd.log" 2>&1 < /dev/null &
+    i=0
+    while [ $i -lt 50 ]; do
+        daemon_alive && { echo "демон слушает порт $(cat "$PORT_FILE")"; return 0; }
+        i=$((i + 1))
+        sleep 0.1
+    done
+    echo "демон не поднялся, смотри $STATE/plumberd.log" >&2
+    return 1
+}
+
+start_reader() {
+    port="$1"
+    pidfile="$STATE/reader-$port.pid"
+    if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+        echo "читатель $port уже работает (pid $(cat "$pidfile"))"
+        return 0
+    fi
+    setsid sh -c '
+        port="$1"; bin="$2"; state="$3"
+        while :; do
+            "$bin/plumber-open" "$port" >>"$state/$port.log" 2>&1
+            sleep 2
+        done
+    ' sh "$port" "$BIN" "$STATE" >/dev/null 2>&1 < /dev/null &
+    echo $! >"$pidfile"
+    echo "читатель $port запущен (pid $!)"
+}
+
+stop_all() {
+    for pidfile in "$STATE"/reader-*.pid; do
+        [ -f "$pidfile" ] || continue
+        pid="$(cat "$pidfile")"
+        kill "$pid" 2>/dev/null && echo "читатель $(basename "$pidfile" .pid | sed 's/reader-//') остановлен"
+        rm -f "$pidfile"
+    done
+    if daemon_alive; then
+        pkill -f "$BIN/plumberd --rules $RULES" 2>/dev/null && echo "демон остановлен"
+    fi
+}
+
+status() {
+    if daemon_alive; then
+        echo "демон: порт $(cat "$PORT_FILE")"
+        "$BIN/plumb" ports | sed 's/^/  порт /'
+    else
+        echo "демон не отвечает" >&2
+    fi
+    for pidfile in "$STATE"/reader-*.pid; do
+        [ -f "$pidfile" ] || continue
+        pid="$(cat "$pidfile")"
+        name="$(basename "$pidfile" .pid | sed 's/reader-//')"
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "читатель $name: жив (pid $pid)"
+        else
+            echo "читатель $name: мёртв"
+        fi
+    done
+}
+
+case "${1:-start}" in
+    start)
+        start_daemon || exit 1
+        for port in $PORTS; do start_reader "$port"; done
+        ;;
+    stop) stop_all ;;
+    restart) stop_all; sleep 1; exec "$0" start ;;
+    status) status ;;
+    *) echo "usage: $0 start|stop|restart|status" >&2; exit 2 ;;
+esac

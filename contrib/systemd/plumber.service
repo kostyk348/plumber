@@ -1,0 +1,15 @@
+[Unit]
+Description=plumber — маршрутизация сообщений по правилам
+Documentation=https://kostyk348.github.io/plumber/
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/plumberd --rules %h/.config/plumber/plumbing
+# plumb start выключен: файл правил — исполняемое содержимое.
+# Включать только осознанно, добавив --allow-start в ExecStart.
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

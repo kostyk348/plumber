@@ -31,7 +31,14 @@ pub struct Message {
 
 impl Message {
     pub fn new(src: &str, kind: &str, data: &str) -> Self {
-        Self { src: src.to_string(), dst: String::new(), wdir: String::new(), kind: kind.to_string(), attr: Vec::new(), data: data.to_string() }
+        Self {
+            src: src.to_string(),
+            dst: String::new(),
+            wdir: String::new(),
+            kind: kind.to_string(),
+            attr: Vec::new(),
+            data: data.to_string(),
+        }
     }
 
     /// The wire form, exactly as `plumb(6)` describes it.
@@ -39,7 +46,13 @@ impl Message {
         let attr = self
             .attr
             .iter()
-            .map(|(k, v)| if v.contains([' ', '"']) { format!("{k}=\"{v}\"") } else { format!("{k}={v}") })
+            .map(|(k, v)| {
+                if v.contains([' ', '"']) {
+                    format!("{k}=\"{v}\"")
+                } else {
+                    format!("{k}={v}")
+                }
+            })
             .collect::<Vec<_>>()
             .join(" ");
         format!(
@@ -72,11 +85,21 @@ impl Message {
                 None => return Err(format!("message ends before the {name} field")),
             }
         }
-        let ndata: usize = fields[5].trim().parse().map_err(|_| format!("ndata is not a number: {:?}", fields[5]))?;
-        if rest.len() < ndata {
-            return Err(format!("data is {ndata} bytes but only {} arrived", rest.len()));
+        let ndata: usize = fields[5]
+            .trim()
+            .parse()
+            .map_err(|_| format!("ndata is not a number: {:?}", fields[5]))?;
+        // `ndata` counts bytes, so slicing must happen on bytes: `&rest[..ndata]` panics when the
+        // cut lands inside a multi-byte character, which turns a malformed message from a client
+        // into a dead connection thread. A truncated UTF-8 sequence becomes U+FFFD instead.
+        let bytes = rest.as_bytes();
+        if bytes.len() < ndata {
+            return Err(format!(
+                "data is {ndata} bytes but only {} arrived",
+                bytes.len()
+            ));
         }
-        let data = rest[..ndata].to_string();
+        let data = String::from_utf8_lossy(&bytes[..ndata]).into_owned();
         Ok(Self {
             src: fields[0].clone(),
             dst: fields[1].clone(),
@@ -89,7 +112,10 @@ impl Message {
 
     /// One attribute by name.
     pub fn attr_get(&self, name: &str) -> Option<&str> {
-        self.attr.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+        self.attr
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
     }
 
     pub fn attr_set(&mut self, name: &str, value: &str) {
@@ -148,7 +174,17 @@ fn parse_attr(text: &str) -> Vec<(String, String)> {
 
 impl fmt::Display for Message {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} → {}: {:?}", if self.src.is_empty() { "?" } else { &self.src }, if self.dst.is_empty() { "(no port)" } else { &self.dst }, truncate(&self.data, 60))
+        write!(
+            f,
+            "{} → {}: {:?}",
+            if self.src.is_empty() { "?" } else { &self.src },
+            if self.dst.is_empty() {
+                "(no port)"
+            } else {
+                &self.dst
+            },
+            truncate(&self.data, 60)
+        )
     }
 }
 
@@ -159,5 +195,83 @@ fn truncate(text: &str, max: usize) -> String {
         let mut out: String = text.chars().take(max).collect();
         out.push('…');
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample(data: &str) -> Message {
+        let mut message = Message::new("plumb", "text", data);
+        message.dst = "edit".into();
+        message.wdir = "/tmp/project".into();
+        message.attr_set("addr", ":42");
+        message
+    }
+
+    #[test]
+    fn wire_roundtrip_keeps_every_field() {
+        let message = sample("src/main.rs:42");
+        let back = Message::from_wire(&message.to_wire()).expect("parses");
+        assert_eq!(back.src, message.src);
+        assert_eq!(back.dst, message.dst);
+        assert_eq!(back.wdir, message.wdir);
+        assert_eq!(back.kind, message.kind);
+        assert_eq!(back.data, message.data);
+        assert_eq!(back.attr_get("addr"), Some(":42"));
+    }
+
+    #[test]
+    fn ndata_counts_bytes_not_characters() {
+        // 13 bytes, 7 characters: a reader that counts characters produces a frame that cannot
+        // be parsed at all, which is the single most common client bug.
+        let message = sample("откуда!");
+        let wire = message.to_wire();
+        assert!(wire.contains("\n13\nоткуда!"), "wire was {wire:?}");
+        assert_eq!(Message::from_wire(&wire).expect("parses").data, "откуда!");
+    }
+
+    #[test]
+    fn a_cut_inside_a_character_does_not_panic() {
+        // ndata points into the middle of a two-byte character: the old code panicked here.
+        let wire = "plumb\nedit\n/tmp\ntext\n\n7\nоткуда!";
+        let message = Message::from_wire(wire).expect("parsed, lossily");
+        assert_eq!(
+            message.data.chars().count(),
+            4,
+            "3 letters + one replacement"
+        );
+        assert!(message.data.ends_with('\u{FFFD}'));
+    }
+
+    #[test]
+    fn trailing_bytes_beyond_ndata_are_ignored() {
+        let wire = "plumb\nedit\n/tmp\ntext\n\n5\nhello, world";
+        assert_eq!(Message::from_wire(wire).expect("parses").data, "hello");
+    }
+
+    #[test]
+    fn a_short_message_is_an_error_not_a_panic() {
+        let wire = "plumb\nedit\n/tmp\ntext\n\n99\nshort";
+        let error = Message::from_wire(wire).expect_err("must fail");
+        assert!(error.contains("bytes"), "error was {error:?}");
+    }
+
+    #[test]
+    fn attributes_with_spaces_survive_the_roundtrip() {
+        let mut message = sample("x");
+        message.attr_set("note", "не трогать тут");
+        let back = Message::from_wire(&message.to_wire()).expect("parses");
+        assert_eq!(back.attr_get("note"), Some("не трогать тут"));
+    }
+
+    #[test]
+    fn display_truncates_by_characters() {
+        let message = sample(&"я".repeat(100));
+        let shown = message.to_string();
+        assert!(shown.contains('…'), "shown: {shown}");
+        // 60 characters plus the ellipsis plus "plumb → edit: "" — well under the 100 characters.
+        assert!(shown.chars().count() < 100, "shown: {shown}");
     }
 }

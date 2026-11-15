@@ -40,7 +40,12 @@ fn main() {
         eprintln!("plumberd: --rules is required (a plumbing rules file)");
         std::process::exit(2);
     };
-    let config = Config { rules, port, port_file, allow_start };
+    let config = Config {
+        rules,
+        port,
+        port_file,
+        allow_start,
+    };
     match Daemon::bind(config) {
         Ok(daemon) => {
             if let Err(e) = daemon.serve() {
@@ -60,6 +65,8 @@ fn default_port_file() -> PathBuf {
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
         return PathBuf::from(local).join("plumber").join("port");
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
     home.join(".plumber").join("port")
 }

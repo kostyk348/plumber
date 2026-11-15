@@ -19,7 +19,11 @@ fn msg(text: &str) -> Message {
 
 #[test]
 fn the_wire_format_is_the_one_plumb6_fixes() {
-    let message = Message { dst: "edit".into(), attr: vec![("addr".into(), ":42".into())], ..msg("a.rs:42") };
+    let message = Message {
+        dst: "edit".into(),
+        attr: vec![("addr".into(), ":42".into())],
+        ..msg("a.rs:42")
+    };
     let wire = message.to_wire();
     let fields: Vec<&str> = wire.split('\n').collect();
     assert_eq!(fields.len(), 7, "seven fields, data last: {wire:?}");
@@ -42,7 +46,11 @@ fn the_first_rule_set_that_matches_wins() {
          type is text\ndata matches 'hello world'\nplumb to second\n",
     );
     let route = rules.route(&msg("hello world"));
-    assert_eq!(route.dst.as_deref(), Some("first"), "order in the file is the priority");
+    assert_eq!(
+        route.dst.as_deref(),
+        Some("first"),
+        "order in the file is the priority"
+    );
 }
 
 #[test]
@@ -74,10 +82,22 @@ plumb to edit
     let actual = file.to_string_lossy().replace('\\', "/");
     let sent = format!("{actual}:12");
     let route = rules.route(&msg(&sent));
-    assert_eq!(route.dst.as_deref(), Some("edit"), "the path must resolve: {sent}");
+    assert_eq!(
+        route.dst.as_deref(),
+        Some("edit"),
+        "the path must resolve: {sent}"
+    );
     // The resolved path may use either separator; compare as paths, not as strings.
-    assert_eq!(std::path::Path::new(&route.message.data), file.as_path(), "data is the resolved file");
-    assert_eq!(route.message.attr_get("addr"), Some("12"), "capture 3 is the digits; capture 2 keeps the colon");
+    assert_eq!(
+        std::path::Path::new(&route.message.data),
+        file.as_path(),
+        "data is the resolved file"
+    );
+    assert_eq!(
+        route.message.attr_get("addr"),
+        Some("12"),
+        "capture 3 is the digits; capture 2 keeps the colon"
+    );
 }
 
 #[test]
@@ -92,7 +112,11 @@ fn a_missing_file_falls_through_to_the_next_rule_set() {
          plumb to stale-code\n",
     );
     let route = rules.route(&msg("nowhere/missing.rs"));
-    assert_eq!(route.dst.as_deref(), Some("stale-code"), "isfile failed, so the next rule set ran");
+    assert_eq!(
+        route.dst.as_deref(),
+        Some("stale-code"),
+        "isfile failed, so the next rule set ran"
+    );
 }
 
 #[test]
@@ -105,13 +129,21 @@ fn macros_are_expanded_when_the_file_is_read() {
 
 #[test]
 fn a_rule_set_that_starts_with_an_action_is_refused() {
-    let err = Rules::parse("plumb to edit\n\ntype is text\ndata is x\nplumb to edit\n", &PathBuf::from(".")).unwrap_err();
+    let err = Rules::parse(
+        "plumb to edit\n\ntype is text\ndata is x\nplumb to edit\n",
+        &PathBuf::from("."),
+    )
+    .unwrap_err();
     assert!(err.contains("needs at least one pattern"), "{err}");
 }
 
 #[test]
 fn a_bad_regular_expression_is_reported_with_its_line() {
-    let err = Rules::parse("type is text\ndata matches '([a-z'\nplumb to edit\n", &PathBuf::from(".")).unwrap_err();
+    let err = Rules::parse(
+        "type is text\ndata matches '([a-z'\nplumb to edit\n",
+        &PathBuf::from("."),
+    )
+    .unwrap_err();
     assert!(err.contains("bad regular expression"), "{err}");
     assert!(err.contains("line 2"), "{err}");
 }
@@ -123,7 +155,11 @@ fn a_macro_inside_a_quoted_regular_expression_is_expanded() {
     let rules = parse("addr=':([0-9]+)'\ntype is text\ndata matches '([a-z]+)('$addr')?'\nattr add addr=$2\nplumb to edit\n");
     let route = rules.route(&msg("main:42"));
     assert_eq!(route.dst.as_deref(), Some("edit"));
-    assert_eq!(route.message.attr_get("addr"), Some(":42"), "the inner quotes are delimiters, not text");
+    assert_eq!(
+        route.message.attr_get("addr"),
+        Some(":42"),
+        "the inner quotes are delimiters, not text"
+    );
 }
 
 #[test]
@@ -137,7 +173,10 @@ fn a_macro_named_like_a_rule_variable_does_not_hijack_it() {
     let rules = parse("file='(hijacked)'\ntype is text\ndata matches '(.+)'\narg isfile $1\ndata set $file\nplumb to edit\n");
     let route = rules.route(&msg(&file.to_string_lossy()));
     assert_eq!(route.dst.as_deref(), Some("edit"));
-    assert_ne!(route.message.data, "(hijacked)", "the variable wins over the macro");
+    assert_ne!(
+        route.message.data, "(hijacked)",
+        "the variable wins over the macro"
+    );
     assert_eq!(std::path::Path::new(&route.message.data), file.as_path());
 }
 
@@ -147,8 +186,17 @@ fn the_daemon_delivers_a_message_to_a_reader() {
     let dir = std::env::temp_dir().join("plumber-test-daemon");
     std::fs::create_dir_all(&dir).unwrap();
     let rules_path = dir.join("plumbing");
-    std::fs::write(&rules_path, "type is text\ndata matches 'hello'\nattr add routed=yes\nplumb to greeting\n").unwrap();
-    let config = Config { rules: rules_path, port: 0, port_file: None, allow_start: false };
+    std::fs::write(
+        &rules_path,
+        "type is text\ndata matches 'hello'\nattr add routed=yes\nplumb to greeting\n",
+    )
+    .unwrap();
+    let config = Config {
+        rules: rules_path,
+        port: 0,
+        port_file: None,
+        allow_start: false,
+    };
     let daemon = Daemon::bind(config).expect("bind");
     let port = daemon.local_port().expect("port");
     std::thread::spawn(move || {
@@ -157,18 +205,22 @@ fn the_daemon_delivers_a_message_to_a_reader() {
 
     // The reader subscribes first, as in Plan 9 you must have the port open to receive a copy.
     let mut reader = TcpStream::connect(("127.0.0.1", port)).expect("connect reader");
-    write!(reader, "READ greeting\n").unwrap();
+    writeln!(reader, "READ greeting").unwrap();
     reader.flush().unwrap();
     std::thread::sleep(std::time::Duration::from_millis(150));
 
     let mut sender = TcpStream::connect(("127.0.0.1", port)).expect("connect sender");
     let wire = Message::new("test", "text", "hello world").to_wire();
-    write!(sender, "SEND {}\n", wire.len()).unwrap();
+    writeln!(sender, "SEND {}", wire.len()).unwrap();
     sender.write_all(wire.as_bytes()).unwrap();
     sender.flush().unwrap();
     let mut reply = String::new();
     BufReader::new(sender).read_line(&mut reply).unwrap();
-    assert_eq!(reply.trim(), "OK greeting", "the sender is told where the message went");
+    assert_eq!(
+        reply.trim(),
+        "OK greeting",
+        "the sender is told where the message went"
+    );
 
     // The reader gets the rewritten message.
     let mut reader = BufReader::new(reader);
@@ -180,7 +232,11 @@ fn the_daemon_delivers_a_message_to_a_reader() {
     let received = Message::from_wire(&String::from_utf8_lossy(&body)).expect("parse received");
     assert_eq!(received.data, "hello world");
     assert_eq!(received.dst, "greeting");
-    assert_eq!(received.attr_get("routed"), Some("yes"), "the rule's attribute reached the reader");
+    assert_eq!(
+        received.attr_get("routed"),
+        Some("yes"),
+        "the rule's attribute reached the reader"
+    );
 }
 
 #[test]
@@ -195,7 +251,13 @@ fn a_message_for_a_port_nobody_reads_is_held_for_the_next_reader() {
         "type is text\ndata matches 'hello'\nattr add held=yes\nplumb to greeting\nplumb client greeting\n",
     )
     .unwrap();
-    let daemon = Daemon::bind(Config { rules: rules_path, port: 0, port_file: None, allow_start: false }).expect("bind");
+    let daemon = Daemon::bind(Config {
+        rules: rules_path,
+        port: 0,
+        port_file: None,
+        allow_start: false,
+    })
+    .expect("bind");
     let port = daemon.local_port().expect("port");
     std::thread::spawn(move || {
         let _ = daemon.serve();
@@ -204,7 +266,7 @@ fn a_message_for_a_port_nobody_reads_is_held_for_the_next_reader() {
     // Nobody is reading yet: the message is held, and the sender is told so.
     let mut sender = TcpStream::connect(("127.0.0.1", port)).expect("connect sender");
     let wire = Message::new("test", "text", "hello later").to_wire();
-    write!(sender, "SEND {}\n", wire.len()).unwrap();
+    writeln!(sender, "SEND {}", wire.len()).unwrap();
     sender.write_all(wire.as_bytes()).unwrap();
     sender.flush().unwrap();
     let mut reply = String::new();
@@ -212,7 +274,8 @@ fn a_message_for_a_port_nobody_reads_is_held_for_the_next_reader() {
     assert_eq!(reply.trim(), "OK greeting (held for a client)");
 
     // A reader arrives afterwards and gets the message that was waiting.
-    let mut reader = BufReader::new(TcpStream::connect(("127.0.0.1", port)).expect("connect reader"));
+    let mut reader =
+        BufReader::new(TcpStream::connect(("127.0.0.1", port)).expect("connect reader"));
     reader.get_mut().write_all(b"READ greeting\n").unwrap();
     reader.get_mut().flush().unwrap();
     let mut length = String::new();
@@ -230,18 +293,31 @@ fn a_message_with_nowhere_to_go_is_an_error_to_the_sender() {
     let dir = std::env::temp_dir().join("plumber-test-noroute");
     std::fs::create_dir_all(&dir).unwrap();
     let rules_path = dir.join("plumbing");
-    std::fs::write(&rules_path, "type is text\ndata matches 'nothing'\nplumb to edit\n").unwrap();
-    let daemon = Daemon::bind(Config { rules: rules_path, port: 0, port_file: None, allow_start: false }).expect("bind");
+    std::fs::write(
+        &rules_path,
+        "type is text\ndata matches 'nothing'\nplumb to edit\n",
+    )
+    .unwrap();
+    let daemon = Daemon::bind(Config {
+        rules: rules_path,
+        port: 0,
+        port_file: None,
+        allow_start: false,
+    })
+    .expect("bind");
     let port = daemon.local_port().expect("port");
     std::thread::spawn(move || {
         let _ = daemon.serve();
     });
     let mut sender = TcpStream::connect(("127.0.0.1", port)).expect("connect");
     let wire = Message::new("test", "text", "unmatched text").to_wire();
-    write!(sender, "SEND {}\n", wire.len()).unwrap();
+    writeln!(sender, "SEND {}", wire.len()).unwrap();
     sender.write_all(wire.as_bytes()).unwrap();
     sender.flush().unwrap();
     let mut reply = String::new();
     BufReader::new(sender).read_line(&mut reply).unwrap();
-    assert!(reply.trim().starts_with("ERR"), "Plan 9 gives the sender a write error: {reply:?}");
+    assert!(
+        reply.trim().starts_with("ERR"),
+        "Plan 9 gives the sender a write error: {reply:?}"
+    );
 }

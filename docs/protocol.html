@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Протокол и клиенты — plumber</title>
+<meta name="description" content="Пять команд по loopback, формат сообщения из plumb(6), примеры клиентов на shell и Python, справочник plumb и plumber-open.">
+<link rel="canonical" href="https://kostyk348.github.io/plumber/protocol.html">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1117'/%3E%3Cpath d='M7 11h9a5 5 0 0 1 0 10H7' stroke='%236ab7ff' stroke-width='3' fill='none'/%3E%3Ccircle cx='24' cy='21' r='2.5' fill='%237ee2b8'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<div class="topnav">
+  <div class="wrap">
+    <a class="brand" href="./">plumber<span>.</span></a>
+    <nav>
+      <a href="./">Обзор</a>
+      <a href="install.html">Установка</a>
+      <a href="rules.html">Правила</a>
+      <a href="protocol.html">Протокол</a>
+      <a href="integration.html">В системе</a>
+    </nav>
+    <button class="theme-btn" id="themeBtn" type="button">Светлая</button>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Справочник</p>
+    <h1>Протокол и клиенты</h1>
+    <p class="lead">Пять команд по loopback. Клиент можно написать на чём угодно, включая
+    <code>nc</code>: демон говорит строками, сообщение — семь строк с длиной перед данными.</p>
+  </div>
+</header>
+
+<main>
+
+<section>
+  <div class="wrap">
+    <h2>Команды</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Команда</th><th>Ответ</th><th>Что делает</th></tr></thead>
+        <tbody>
+          <tr><td><code>SEND n</code></td><td><code>OK порт</code> или <code>ERR причина</code></td><td>следом идут <code>n</code> байт сообщения; демон прогоняет его по правилам</td></tr>
+          <tr><td><code>READ порт</code></td><td>поток сообщений</td><td>подписаться на порт; дальше в соединение идут сообщения с длиной перед каждым</td></tr>
+          <tr><td><code>PORTS</code></td><td><code>порт N</code> на строку</td><td>порты из правил и число читателей на каждом</td></tr>
+          <tr><td><code>RULES</code></td><td>текст файла правил</td><td>что демон на самом деле разбирает сейчас</td></tr>
+          <tr><td><code>PING</code></td><td><code>PONG</code></td><td>жив ли</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Соединение одноразовое: команда, ответ, закрытие. Никакого состояния между запросами,
+    никакого рукопожатия, никакой версии протокола — всё, что можно сделать неправильно, здесь
+    просто не предусмотрено.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Формат сообщения</h2>
+    <p>Ровно как в <code>plumb(6)</code>: строки, атрибуты строкой, затем длина и данные.</p>
+<pre><code>src            <span class="c"># кто отправил</span>
+dst            <span class="c"># на какой порт попало (ставит демон)</span>
+wdir           <span class="c"># рабочий каталог отправителя</span>
+type           <span class="c"># text, image, …</span>
+attr           <span class="c"># пары k=v через пробел; пробелы и кавычки — в "…"</span>
+ndata          <span class="c"># длина data в байтах</span>
+data           <span class="c"># сам текст (может содержать переводы строк)</span>
+</code></pre>
+    <p>Пример на проводе — то, что уходит в сокет при <code>plumb send "src/main.rs:42"</code>:</p>
+<pre><code>plumbd
+edit
+/home/you/project
+text
+addr=:42
+
+29
+/home/you/project/src/main.rs
+</code></pre>
+    <div class="note">
+      Длина <code>data</code> — в байтах, а не в символах: сообщение с эмодзи или кириллицей
+      занимает больше байт, чем выглядит. Это то место, где самодельные клиенты ломаются чаще всего.
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Клиент на shell</h2>
+    <p>Демон слушает <code>127.0.0.1</code>, порт лежит в <code>~/.plumber/port</code>.</p>
+<pre><code>PORT=$(cat ~/.plumber/port)
+printf 'PING\r\n' | nc 127.0.0.1 "$PORT"
+<span class="c"># PONG</span>
+
+printf 'PORTS\n' | nc 127.0.0.1 "$PORT"
+<span class="c"># edit 1</span>
+<span class="c"># web 0</span>
+</code></pre>
+    <p>Отправка без <code>plumb</code> — считаем длину сами:</p>
+<pre><code>msg=$'whoami\nedit\n'"$PWD"$'\ntext\n\n5\nhello'
+printf 'SEND %d\n%s' "${#msg}" "$msg" | nc 127.0.0.1 "$(cat ~/.plumber/port)"
+</code></pre>
+    <p class="note warn">Это работает для ASCII. Для UTF-8 считайте байты, а не символы: <code>plumb</code> и
+    <code>plumber-open</code> уже это делают.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Клиент на Python</h2>
+    <p>Сорок строк — полноценный читатель порта, который переживает обрыв соединения.</p>
+<pre><code>import socket, pathlib
+
+def port():
+    return int(pathlib.Path.home().joinpath(".plumber/port").read_text().strip())
+
+def frames(sock):
+    f = sock.makefile("rb")
+    while True:
+        line = f.readline()
+        if not line:
+            return
+        n = int(line.strip())
+        yield f.read(n).decode("utf-8", "replace")
+
+s = socket.create_connection(("127.0.0.1", port()))
+s.sendall(b"READ edit\n")
+for message in frames(s):
+    src, dst, wdir, kind, attr, ndata, data = message.split("\n", 6)
+    attrs = dict(p.split("=", 1) for p in attr.split() if "=" in p)
+    print(f"{data} {attrs.get('addr', '')}")
+</code></pre>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Что умеют программы</h2>
+    <h3><code>plumb</code></h3>
+<pre><code>plumb send &lt;text&gt; [--src NAME] [--type text] [--wdir DIR] [--port N]
+plumb read &lt;port&gt; [--port N]
+plumb rules | plumb ports [--port N]
+plumb test --rules FILE &lt;text&gt; [--wdir DIR]      <span class="c"># без демона</span>
+</code></pre>
+    <h3><code>plumber-open</code></h3>
+<pre><code>plumber-open &lt;port&gt; [--cmd 'ШАБЛОН'] [--port N] [--dry-run] [--once]
+</code></pre>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Порт</th><th>Кандидаты команд (первый найденный в PATH)</th></tr></thead>
+        <tbody>
+          <tr><td><code>edit</code></td><td><code>code -g {file}:{line}</code> → <code>code {file}</code> → <code>notepad {file}</code></td></tr>
+          <tr><td><code>web</code></td><td><code>cmd /c start "" {data}</code> → <code>xdg-open {data}</code></td></tr>
+          <tr><td><code>pdf</code></td><td><code>pdfcraft {file} --page {page}</code> → <code>cmd /c start "" {file}</code> → <code>xdg-open {file}</code></td></tr>
+          <tr><td><code>scene</code></td><td><code>cadcraft {file}</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Подстановки в шаблоне: <code>{data}</code> <code>{file}</code> <code>{line}</code>
+    <code>{page}</code> <code>{addr}</code> <code>{dir}</code> <code>{attr:имя}</code>.
+    Свой шаблон заменяет весь список кандидатов:</p>
+<pre><code>plumber-open edit --cmd 'gvim -c {line} {file}'
+plumber-open pdf  --cmd 'zathura -P {page} {file}'
+
+<span class="c"># что запустилось бы — ничего не запуская</span>
+plumber-open edit --dry-run
+</code></pre>
+    <div class="note">
+      <code>--dry-run</code> — самый быстрый способ проверить, что правило и опенер сходятся: он
+      печатает готовую команду и не трогает ни один процесс.
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Ошибки, которые видит отправитель</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Ответ</th><th>Что значит</th></tr></thead>
+        <tbody>
+          <tr><td><code>ERR no rule matched this message</code></td><td>ни один набор правил не совпал — сообщение выброшено. Это не сбой, а решение правил.</td></tr>
+          <tr><td><code>ERR no reader on port X</code></td><td>правило сработало, но на порту никого нет и клиент не назван — отправитель должен узнать об этом, как <code>write()</code> в Plan 9.</td></tr>
+          <tr><td><code>ERR unknown command (…)</code></td><td>демон не понял строку команды; в скобках перечислено, что он понимает.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Если правило называет клиента (<code>plumb client</code>), ошибки не будет: сообщение
+      придерживается внутри демона и уходит первому, кто откроет порт. Это единственное место, где
+      демон что-то помнит, и эта память не переживает его перезапуск.
+    </p>
+  </div>
+</section>
+
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>MIT OR Apache-2.0 · <a href="https://github.com/kostyk348/plumber">github.com/kostyk348/plumber</a></span>
+    <span><a href="integration.html">Дальше: в системе →</a></span>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

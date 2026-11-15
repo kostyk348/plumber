@@ -151,7 +151,11 @@ fn expand(text: &str, vars: &Vars) -> String {
             while i < chars.len() && chars[i].is_ascii_digit() {
                 i += 1;
             }
-            let index: usize = chars[start..i].iter().collect::<String>().parse().unwrap_or(usize::MAX);
+            let index: usize = chars[start..i]
+                .iter()
+                .collect::<String>()
+                .parse()
+                .unwrap_or(usize::MAX);
             if let Some(value) = vars.caps.get(index) {
                 out.push_str(value);
             }
@@ -273,8 +277,13 @@ impl Rules {
             }
             if let Some(rest) = line.strip_prefix("include ") {
                 let name = rest.trim();
-                let path = if Path::new(name).is_absolute() { std::path::PathBuf::from(name) } else { base.join(name) };
-                let text = std::fs::read_to_string(&path).map_err(|e| format!("include {name}: {e}"))?;
+                let path = if Path::new(name).is_absolute() {
+                    std::path::PathBuf::from(name)
+                } else {
+                    base.join(name)
+                };
+                let text =
+                    std::fs::read_to_string(&path).map_err(|e| format!("include {name}: {e}"))?;
                 // An include brings its own rule sets; it is spliced where the line stands, so the
                 // current set is flushed first.
                 if !current.patterns.is_empty() || !current.actions.is_empty() {
@@ -306,33 +315,55 @@ impl Rules {
                     return Err(format!("line {line_no}: `plumb` needs an action"));
                 }
                 let action = match parts[1].as_str() {
-                    "to" => Action::To(parts.get(2).cloned().ok_or_else(|| format!("line {line_no}: `plumb to` needs a port"))?),
+                    "to" => Action::To(
+                        parts
+                            .get(2)
+                            .cloned()
+                            .ok_or_else(|| format!("line {line_no}: `plumb to` needs a port"))?,
+                    ),
                     "start" => Action::Start(parts[2..].join(" ")),
                     "client" => Action::Client(parts[2..].join(" ")),
                     "hide" => Action::Hide,
                     other => return Err(format!("line {line_no}: unknown action `plumb {other}`")),
                 };
                 if current.patterns.is_empty() {
-                    return Err(format!("line {line_no}: a rule set needs at least one pattern before an action"));
+                    return Err(format!(
+                        "line {line_no}: a rule set needs at least one pattern before an action"
+                    ));
                 }
                 current.actions.push(action);
                 continue;
             }
             if parts.len() < 2 {
-                return Err(format!("line {line_no}: expected `<object> <verb> <argument>`"));
+                return Err(format!(
+                    "line {line_no}: expected `<object> <verb> <argument>`"
+                ));
             }
-            let obj = obj_of(&parts[0]).ok_or_else(|| format!("line {line_no}: unknown object `{}`", parts[0]))?;
-            let verb = verb_of(&parts[1]).ok_or_else(|| format!("line {line_no}: unknown verb `{}`", parts[1]))?;
+            let obj = obj_of(&parts[0])
+                .ok_or_else(|| format!("line {line_no}: unknown object `{}`", parts[0]))?;
+            let verb = verb_of(&parts[1])
+                .ok_or_else(|| format!("line {line_no}: unknown verb `{}`", parts[1]))?;
             let arg = parts[2..].join(" ");
             if (verb == Verb::Matches) && arg.is_empty() {
-                return Err(format!("line {line_no}: `matches` needs a regular expression"));
+                return Err(format!(
+                    "line {line_no}: `matches` needs a regular expression"
+                ));
             }
             let regex = if verb == Verb::Matches {
-                Some(Regex::new(&arg).map_err(|e| format!("line {line_no}: bad regular expression: {e}"))?)
+                Some(
+                    Regex::new(&arg)
+                        .map_err(|e| format!("line {line_no}: bad regular expression: {e}"))?,
+                )
             } else {
                 None
             };
-            current.patterns.push(Pattern { obj, verb, arg, regex, line: line_no });
+            current.patterns.push(Pattern {
+                obj,
+                verb,
+                arg,
+                regex,
+                line: line_no,
+            });
         }
         if !current.patterns.is_empty() || !current.actions.is_empty() {
             for action in &current.actions {
@@ -367,7 +398,11 @@ impl Rules {
             if !ok {
                 continue;
             }
-            let mut route = Route { message: working, rule_line: set.patterns.first().map(|p| p.line), ..Default::default() };
+            let mut route = Route {
+                message: working,
+                rule_line: set.patterns.first().map(|p| p.line),
+                ..Default::default()
+            };
             for action in &set.actions {
                 match action {
                     Action::To(port) => route.dst = Some(expand(port, &vars)),
@@ -381,7 +416,10 @@ impl Rules {
             }
             return route;
         }
-        Route { message: msg.clone(), ..Default::default() }
+        Route {
+            message: msg.clone(),
+            ..Default::default()
+        }
     }
 }
 
@@ -412,7 +450,12 @@ fn apply(pattern: &Pattern, msg: &mut Message, vars: &mut Vars) -> bool {
         Obj::Dst => msg.dst.clone(),
         Obj::Wdir => msg.wdir.clone(),
         Obj::Kind => msg.kind.clone(),
-        Obj::Attr => msg.attr.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" "),
+        Obj::Attr => msg
+            .attr
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(" "),
         Obj::Data => msg.data.clone(),
         Obj::Arg => arg.clone(),
     };
@@ -435,10 +478,18 @@ fn apply(pattern: &Pattern, msg: &mut Message, vars: &mut Vars) -> bool {
             exists
         }
         Verb::Matches => {
-            let Some(regex) = &pattern.regex else { return false };
+            let Some(regex) = &pattern.regex else {
+                return false;
+            };
             match regex.captures(&subject) {
                 Some(caps) => {
-                    vars.caps = (0..caps.len()).map(|i| caps.get(i).map(|m| m.as_str().to_string()).unwrap_or_default()).collect();
+                    vars.caps = (0..caps.len())
+                        .map(|i| {
+                            caps.get(i)
+                                .map(|m| m.as_str().to_string())
+                                .unwrap_or_default()
+                        })
+                        .collect();
                     true
                 }
                 None => false,
@@ -487,6 +538,9 @@ fn resolve(path: &str, wdir: &str) -> std::path::PathBuf {
 
 fn split_pairs(text: &str) -> Vec<(String, String)> {
     text.split_whitespace()
-        .filter_map(|pair| pair.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+        .filter_map(|pair| {
+            pair.split_once('=')
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+        })
         .collect()
 }

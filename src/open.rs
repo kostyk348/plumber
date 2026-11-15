@@ -25,10 +25,32 @@ use crate::message::Message;
 /// The candidates for a port, most specific first. The first one whose program exists on `PATH`
 /// wins; a `--cmd` template replaces the whole list.
 pub fn candidates(port: &str) -> Vec<&'static str> {
+    // Ordered by how much of the message the program can use: a program that jumps to a line comes
+    // before one that cannot, and the fully portable fallbacks (`open` on macOS, `xdg-open` on
+    // Linux, `start` on Windows) come last. The first name found in PATH wins, so one list works
+    // on every desktop instead of a per-platform list chosen at build time.
     match port {
-        "edit" => vec!["code -g {file}:{line}", "code {file}", "notepad {file}"],
-        "web" => vec!["cmd /c start \"\" {data}", "xdg-open {data}"],
-        "pdf" => vec!["pdfcraft {file} --page {page}", "cmd /c start \"\" {file}", "xdg-open {file}"],
+        "edit" => vec![
+            "code -g {file}:{line}",
+            "zed {file}:{line}",
+            "gvim +{line} {file}",
+            "vim +{line} {file}",
+            "nvim +{line} {file}",
+            "subl {file}:{line}",
+            "kate --line {line} {file}",
+            "micro {file}",
+            "notepad {file}",
+        ],
+        "web" => vec!["xdg-open {data}", "open {data}", "cmd /c start \"\" {data}"],
+        "pdf" => vec![
+            "zathura -P {page} {file}",
+            "pdfcraft {file} --page {page}",
+            "okular --page {page} {file}",
+            "evince {file}",
+            "xdg-open {file}",
+            "open {file}",
+            "cmd /c start \"\" {file}",
+        ],
         "scene" => vec!["cadcraft {file}"],
         _ => Vec::new(),
     }
@@ -36,14 +58,21 @@ pub fn candidates(port: &str) -> Vec<&'static str> {
 
 /// Build and (unless asked not to) start the command for one message. Returns the command line as
 /// it was run, so a caller — or a test — can see exactly what happened.
-pub fn open(message: &Message, port: &str, template: Option<&str>, dry_run: bool) -> Result<String, String> {
+pub fn open(
+    message: &Message,
+    port: &str,
+    template: Option<&str>,
+    dry_run: bool,
+) -> Result<String, String> {
     let vars = Vars::from(message);
     let list: Vec<String> = match template {
         Some(template) => vec![template.to_string()],
         None => candidates(port).into_iter().map(str::to_string).collect(),
     };
     if list.is_empty() {
-        return Err(format!("no default opener for port {port:?}; pass --cmd 'program {{file}}'"));
+        return Err(format!(
+            "no default opener for port {port:?}; pass --cmd 'program {{file}}'"
+        ));
     }
     let mut tried = Vec::new();
     // An explicit template is the caller's choice and is run as given — a dry run must show it
@@ -52,7 +81,9 @@ pub fn open(message: &Message, port: &str, template: Option<&str>, dry_run: bool
     let explicit = template.is_some();
     for candidate in &list {
         let words = split_words(&vars.expand(candidate));
-        let Some(program) = words.first() else { continue };
+        let Some(program) = words.first() else {
+            continue;
+        };
         if !explicit && !on_path(program) {
             tried.push(format!("{program} (not on PATH)"));
             continue;
@@ -68,7 +99,10 @@ pub fn open(message: &Message, port: &str, template: Option<&str>, dry_run: bool
                 let _ = child.wait();
             });
         }
-        return Ok(format!("{} {line}", if dry_run { "would run:" } else { "opened:" }));
+        return Ok(format!(
+            "{} {line}",
+            if dry_run { "would run:" } else { "opened:" }
+        ));
     }
     Err(format!("nothing to open with; tried {}", tried.join(", ")))
 }
@@ -79,7 +113,13 @@ pub fn open(message: &Message, port: &str, template: Option<&str>, dry_run: bool
 pub fn display(words: &[String]) -> String {
     words
         .iter()
-        .map(|word| if word.is_empty() || word.contains(' ') { format!("\"{word}\"") } else { word.clone() })
+        .map(|word| {
+            if word.is_empty() || word.contains(' ') {
+                format!("\"{word}\"")
+            } else {
+                word.clone()
+            }
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -130,8 +170,11 @@ impl Vars {
             .replace("{page}", &self.page)
             .replace("{addr}", &self.addr)
             .replace("{dir}", &self.dir);
-        // `code -g file:` with no line number opens nothing: drop the dangling colon.
+        // `code -g file:` with no line number opens nothing: drop the dangling colon. A lone
+        // `+` (vim's "jump to line") would mean "jump to the last line", which is worse than
+        // opening at the top, so it is dropped the same way.
         out.split(' ')
+            .filter(|word| *word != "+")
             .map(|word| word.strip_suffix(':').unwrap_or(word))
             .collect::<Vec<_>>()
             .join(" ")
@@ -177,9 +220,15 @@ pub fn on_path(program: &str) -> bool {
     if path.components().count() > 1 {
         return path.is_file();
     }
-    let Some(dirs) = std::env::var_os("PATH") else { return false };
+    let Some(dirs) = std::env::var_os("PATH") else {
+        return false;
+    };
     let extensions: Vec<String> = if cfg!(windows) {
-        std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.BAT;.CMD".into()).split(';').map(|ext| ext.to_lowercase()).collect()
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".EXE;.BAT;.CMD".into())
+            .split(';')
+            .map(|ext| ext.to_lowercase())
+            .collect()
     } else {
         vec![String::new()]
     };

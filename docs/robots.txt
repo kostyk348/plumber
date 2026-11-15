@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://kostyk348.github.io/plumber/sitemap.xml

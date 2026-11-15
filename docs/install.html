@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Установка — plumber</title>
+<meta name="description" content="Как собрать и установить plumber: из исходников, бинарниками с релиза, демон как пользовательский сервис systemd, файл правил и номер порта.">
+<link rel="canonical" href="https://kostyk348.github.io/plumber/install.html">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1117'/%3E%3Cpath d='M7 11h9a5 5 0 0 1 0 10H7' stroke='%236ab7ff' stroke-width='3' fill='none'/%3E%3Ccircle cx='24' cy='21' r='2.5' fill='%237ee2b8'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<div class="topnav">
+  <div class="wrap">
+    <a class="brand" href="./">plumber<span>.</span></a>
+    <nav>
+      <a href="./">Обзор</a>
+      <a href="install.html">Установка</a>
+      <a href="rules.html">Правила</a>
+      <a href="protocol.html">Протокол</a>
+      <a href="integration.html">В системе</a>
+    </nav>
+    <button class="theme-btn" id="themeBtn" type="button">Светлая</button>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Установка</p>
+    <h1>Три бинарника,<br>один текстовый файл</h1>
+    <p class="lead">Ставить нечего, кроме <code>plumberd</code>, <code>plumb</code> и
+    <code>plumber-open</code>. Никаких зависимостей во время работы, никаких демонов в системе,
+    о которых вы не просили.</p>
+  </div>
+</header>
+
+<main>
+
+<section>
+  <div class="wrap">
+    <h2>Из исходников</h2>
+    <p>Нужен Rust 1.80 или новее. Сборка — одна команда, зависимостей у самого проекта нет.</p>
+<pre><code>git clone https://github.com/kostyk348/plumber
+cd plumber
+cargo build --release
+
+<span class="c"># положить в PATH</span>
+install -m 755 target/release/plumberd \
+              target/release/plumb \
+              target/release/plumber-open  ~/.local/bin/
+</code></pre>
+    <p>Проверка, что всё живо, — без демона и без сокета:</p>
+<pre><code>plumb test --rules plumbing.example "src/main.rs:42"
+<span class="c"># edit  data="src/main.rs:42"  attr line=42</span>
+</code></pre>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Готовые бинарники</h2>
+    <p>
+      На теге собираются архивы под все десктопные платформы и прикладываются к релизу рядом с
+      <code>SHA256SUMS</code>:
+    </p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Платформа</th><th>Архив</th></tr></thead>
+        <tbody>
+          <tr><td>Linux x86-64</td><td><code>plumber-linux-x64.tar.gz</code></td></tr>
+          <tr><td>Windows x86-64</td><td><code>plumber-windows-x64.zip</code></td></tr>
+          <tr><td>macOS Apple Silicon</td><td><code>plumber-macos-arm64.tar.gz</code></td></tr>
+          <tr><td>macOS Intel</td><td><code>plumber-macos-x64.tar.gz</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+<pre><code>curl -fLO https://github.com/kostyk348/plumber/releases/latest/download/plumber-linux-x64.tar.gz
+sha256sum -c plumber-linux-x64.tar.gz.sha256
+tar -xzf plumber-linux-x64.tar.gz
+install -m 755 plumber-linux-x64/* ~/.local/bin/
+</code></pre>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Где что лежит</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Что</th><th>Linux / macOS</th><th>Windows</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Файл с номером порта (его пишет демон, читают клиенты)</td>
+            <td><code>~/.plumber/port</code></td>
+            <td><code>%LOCALAPPDATA%\plumber\port</code></td>
+          </tr>
+          <tr>
+            <td>Файл правил</td>
+            <td>где скажете: <code>--rules</code></td>
+            <td>где скажете: <code>--rules</code></td>
+          </tr>
+          <tr>
+            <td>Порт по умолчанию для клиентов</td>
+            <td colspan="2">берётся из файла порта; переопределяется <code>--port N</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note">
+      Демон сам создаёт каталог для файла порта, но не создаёт файл правил: без <code>--rules</code>
+      он откажется стартовать — молча работать «по каким-то» правилам хуже, чем не работать.
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Демон как пользовательский сервис (systemd)</h2>
+    <p>
+      Демону не нужны права root: он слушает loopback и читает один файл. Поэтому — юнит в
+      <code>systemd --user</code>, а не системный сервис.
+    </p>
+<pre><code>mkdir -p ~/.config/systemd/user ~/.config/plumber
+cp plumbing.example ~/.config/plumber/plumbing
+
+cat &gt; ~/.config/systemd/user/plumber.service &lt;&lt;'EOF'
+[Unit]
+Description=plumber — маршрутизация сообщений по правилам
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/plumberd --rules %h/.config/plumber/plumbing
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+EOF
+
+systemctl --user daemon-reload
+systemctl --user enable --now plumber.service
+systemctl --user status plumber.service --no-pager
+</code></pre>
+    <p>Проверка вживую — из соседнего терминала:</p>
+<pre><code>plumb ports          <span class="c"># порты из правил и сколько на каждом читателей</span>
+plumb send "https://9fans.net"
+<span class="c"># OK web</span>
+</code></pre>
+    <div class="note">
+      Логи — <code>journalctl --user -u plumber -f</code>. Правила перечитываются по изменению
+      файла: <code>systemctl --user restart</code> после правки не нужен.
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Windows и macOS</h2>
+    <p>
+      На Windows демон запускается из ярлыка, из <code>shell:startup</code> или Планировщиком задач:
+      <code>plumberd.exe --rules %USERPROFILE%\.config\plumber\plumbing</code>. Служба не нужна —
+      демон работает в сессии пользователя, потому что открывает программы этой сессии.
+    </p>
+    <p>
+      На macOS — <code>launchd</code>:
+      <code>~/Library/LaunchAgents/dev.plumber.plist</code> с
+      <code>ProgramArguments</code> из тех же трёх строк, <code>RunAtLoad</code> и
+      <code>KeepAlive</code>. Загрузить: <code>launchctl load ~/Library/LaunchAgents/dev.plumber.plist</code>.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Проверить, что всё работает</h2>
+<pre><code><span class="c"># 1. демон отвечает</span>
+plumb ports
+
+<span class="c"># 2. правила разбираются и маршрут находится (без демона)</span>
+plumb test --rules ~/.config/plumber/plumbing "src/main.rs:42"
+
+<span class="c"># 3. читатель и отправитель находят друг друга</span>
+plumb read edit &amp;          <span class="c"># в одном окне</span>
+plumb send "Cargo.toml:1"   <span class="c"># в другом: OK edit</span>
+</code></pre>
+    <p>Если третий шаг вернул <code>ERR no reader on port edit</code> — демон жив, правила сработали,
+    просто порт никто не слушает. Это не ошибка установки.</p>
+  </div>
+</section>
+
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>MIT OR Apache-2.0 · <a href="https://github.com/kostyk348/plumber">github.com/kostyk348/plumber</a></span>
+    <span><a href="protocol.html">Дальше: протокол →</a></span>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

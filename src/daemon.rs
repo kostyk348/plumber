@@ -12,12 +12,20 @@
 //!
 //! `READ` blocks and holds the connection: that is what a reader program *is* in this model.
 
+/// The largest message the daemon will read. A frame that claims a gigabyte should be refused,
+/// not allocated: the socket is loopback-only, but "only I can reach it" is not a memory budget.
+pub const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+
+/// How long one read call may stall before the connection is treated as broken. Generous for a
+/// loopback frame, short enough that a wedged client cannot hold a worker thread for long.
+const FRAME_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
@@ -37,7 +45,12 @@ pub struct Config {
 
 impl Config {
     pub fn new(rules: impl Into<PathBuf>) -> Self {
-        Self { rules: rules.into(), port: 0, port_file: None, allow_start: false }
+        Self {
+            rules: rules.into(),
+            port: 0,
+            port_file: None,
+            allow_start: false,
+        }
     }
 }
 
@@ -55,13 +68,18 @@ struct State {
 
 impl State {
     fn reload_if_changed(&mut self) {
-        let Ok(meta) = std::fs::metadata(&self.rules_path()) else { return };
+        let Ok(meta) = std::fs::metadata(self.rules_path()) else {
+            return;
+        };
         let modified = meta.modified().ok();
         if modified.is_some() && modified == self.rules_mtime {
             return;
         }
-        let Ok(text) = std::fs::read_to_string(self.rules_path()) else { return };
-        if let Ok(rules) = Rules::parse(&text, self.rules_path().parent().unwrap_or(Path::new("."))) {
+        let Ok(text) = std::fs::read_to_string(self.rules_path()) else {
+            return;
+        };
+        if let Ok(rules) = Rules::parse(&text, self.rules_path().parent().unwrap_or(Path::new(".")))
+        {
             self.rules = rules;
             self.rules_text = text;
             self.rules_mtime = modified;
@@ -83,21 +101,43 @@ impl Daemon {
     /// Bind the socket and load the rules. The rules are validated here, so a broken file fails
     /// at startup with its line number instead of at the first message.
     pub fn bind(config: Config) -> Result<Self, String> {
-        let text = std::fs::read_to_string(&config.rules).map_err(|e| format!("{}: {e}", config.rules.display()))?;
-        let base = config.rules.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let text = std::fs::read_to_string(&config.rules)
+            .map_err(|e| format!("{}: {e}", config.rules.display()))?;
+        let base = config
+            .rules
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf();
         let rules = Rules::parse(&text, &base)?;
-        let mtime = std::fs::metadata(&config.rules).ok().and_then(|m| m.modified().ok());
+        let mtime = std::fs::metadata(&config.rules)
+            .ok()
+            .and_then(|m| m.modified().ok());
         let mut readers = HashMap::new();
         for port in &rules.ports {
             readers.insert(port.clone(), Vec::new());
         }
-        let state = State { rules, rules_text: text, rules_mtime: mtime, readers, held: HashMap::new(), path: config.rules.clone() };
-        let listener = TcpListener::bind(("127.0.0.1", config.port)).map_err(|e| format!("cannot listen: {e}"))?;
-        Ok(Self { listener, state: Arc::new(Mutex::new(state)), config })
+        let state = State {
+            rules,
+            rules_text: text,
+            rules_mtime: mtime,
+            readers,
+            held: HashMap::new(),
+            path: config.rules.clone(),
+        };
+        let listener = TcpListener::bind(("127.0.0.1", config.port))
+            .map_err(|e| format!("cannot listen: {e}"))?;
+        Ok(Self {
+            listener,
+            state: Arc::new(Mutex::new(state)),
+            config,
+        })
     }
 
     pub fn local_port(&self) -> Result<u16, String> {
-        self.listener.local_addr().map(|a| a.port()).map_err(|e| e.to_string())
+        self.listener
+            .local_addr()
+            .map(|a| a.port())
+            .map_err(|e| e.to_string())
     }
 
     /// Serve until the process is stopped. One thread per client: a reader holds its connection
@@ -110,7 +150,8 @@ impl Daemon {
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            std::fs::write(path, port.to_string()).map_err(|e| format!("{}: {e}", path.display()))?;
+            std::fs::write(path, port.to_string())
+                .map_err(|e| format!("{}: {e}", path.display()))?;
         }
         for stream in self.listener.incoming() {
             let Ok(stream) = stream else { continue };
@@ -125,6 +166,10 @@ impl Daemon {
 }
 
 fn handle(stream: TcpStream, state: Arc<Mutex<State>>, allow_start: bool) -> Result<(), String> {
+    // A client that says "SEND 4096" and then stops sending would otherwise pin this thread in
+    // read_exact forever: the connection is one client, and a stalled one must not be able to
+    // exhaust the daemon. The timeout is per read call, so a slow but progressing sender is fine.
+    let _ = stream.set_read_timeout(Some(FRAME_READ_TIMEOUT));
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut writer = stream;
     let mut line = String::new();
@@ -138,11 +183,32 @@ fn handle(stream: TcpStream, state: Arc<Mutex<State>>, allow_start: bool) -> Res
         let words: Vec<&str> = command.split_whitespace().collect();
         match words.as_slice() {
             ["SEND", count] => {
-                let bytes: usize = count.parse().map_err(|_| format!("SEND needs a byte count, got {count:?}"))?;
-                let mut body = vec![0u8; bytes];
-                reader.read_exact(&mut body).map_err(|e| format!("short message: {e}"))?;
-                let text = String::from_utf8_lossy(&body).into_owned();
-                let reply = send(&state, &text, allow_start);
+                // Anything the sender got wrong must come back as an error on this connection:
+                // a client that is silently disconnected cannot tell a bug from a crash, and this
+                // is the one place where the protocol is wide enough to get it wrong.
+                let body: Result<String, String> = (|| {
+                    let bytes: usize = count
+                        .parse()
+                        .map_err(|_| format!("SEND needs a byte count, got {count:?}"))?;
+                    if bytes > MAX_MESSAGE_BYTES {
+                        return Err(format!(
+                            "message of {bytes} bytes is larger than the {MAX_MESSAGE_BYTES}-byte limit"
+                        ));
+                    }
+                    let mut body = vec![0u8; bytes];
+                    reader.read_exact(&mut body).map_err(|e| match e.kind() {
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => format!(
+                            "timed out after {}s waiting for {bytes} bytes of message",
+                            FRAME_READ_TIMEOUT.as_secs()
+                        ),
+                        _ => format!("short message: {e}"),
+                    })?;
+                    Ok(String::from_utf8_lossy(&body).into_owned())
+                })();
+                let reply = match body {
+                    Ok(text) => send(&state, &text, allow_start),
+                    Err(e) => format!("ERR malformed message: {e}"),
+                };
                 writeln!(writer, "{reply}").map_err(|e| e.to_string())?;
                 writer.flush().map_err(|e| e.to_string())?;
             }
@@ -163,7 +229,10 @@ fn handle(stream: TcpStream, state: Arc<Mutex<State>>, allow_start: bool) -> Res
                 }
                 for message in receiver {
                     let wire = message.to_wire();
-                    if writeln!(writer, "{}", wire.len()).and_then(|()| writer.write_all(wire.as_bytes())).is_err() {
+                    if writeln!(writer, "{}", wire.len())
+                        .and_then(|()| writer.write_all(wire.as_bytes()))
+                        .is_err()
+                    {
                         break;
                     }
                     if writer.flush().is_err() {
@@ -186,7 +255,9 @@ fn handle(stream: TcpStream, state: Arc<Mutex<State>>, allow_start: bool) -> Res
             }
             ["RULES"] => {
                 let state = state.lock().map_err(|e| e.to_string())?;
-                writer.write_all(state.rules_text.as_bytes()).map_err(|e| e.to_string())?;
+                writer
+                    .write_all(state.rules_text.as_bytes())
+                    .map_err(|e| e.to_string())?;
                 writer.flush().map_err(|e| e.to_string())?;
                 return Ok(());
             }
@@ -195,7 +266,11 @@ fn handle(stream: TcpStream, state: Arc<Mutex<State>>, allow_start: bool) -> Res
                 writer.flush().map_err(|e| e.to_string())?;
             }
             _ => {
-                writeln!(writer, "ERR unknown command (SEND n | READ port | PORTS | RULES | PING)").map_err(|e| e.to_string())?;
+                writeln!(
+                    writer,
+                    "ERR unknown command (SEND n | READ port | PORTS | RULES | PING)"
+                )
+                .map_err(|e| e.to_string())?;
                 writer.flush().map_err(|e| e.to_string())?;
             }
         }
@@ -237,17 +312,28 @@ fn send(state: &Arc<Mutex<State>>, wire: &str, allow_start: bool) -> String {
     }
     match delivered_to {
         Some(port) => {
-            if state.readers.get(&port).map(|r| r.is_empty()).unwrap_or(true) {
+            if state
+                .readers
+                .get(&port)
+                .map(|r| r.is_empty())
+                .unwrap_or(true)
+            {
                 if let Some(command) = route.client.clone() {
                     if allow_start {
                         spawn(&command);
                     }
                     // Hold the message for whoever opens the port next.
-                    state.held.entry(port.clone()).or_default().push(route.message.clone());
+                    state
+                        .held
+                        .entry(port.clone())
+                        .or_default()
+                        .push(route.message.clone());
                     return format!("OK {port} (held for a client)");
                 }
                 // Nobody reading and nothing to start: discarded, as in Plan 9.
-                return format!("ERR no reader on port {port} and the rule names no client or start");
+                return format!(
+                    "ERR no reader on port {port} and the rule names no client or start"
+                );
             }
             deliver(&mut state, &port, route.message);
             format!("OK {port}")

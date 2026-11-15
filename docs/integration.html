@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>plumber в системе — сервис, MIME, редакторы</title>
+<meta name="description" content="Как сделать plumber частью рабочей системы: пользовательский сервис systemd, файл правил в ~/.config, xdg-open и MIME, ярлыки, интеграция с редакторами и терминалом.">
+<link rel="canonical" href="https://kostyk348.github.io/plumber/integration.html">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1117'/%3E%3Cpath d='M7 11h9a5 5 0 0 1 0 10H7' stroke='%236ab7ff' stroke-width='3' fill='none'/%3E%3Ccircle cx='24' cy='21' r='2.5' fill='%237ee2b8'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<div class="topnav">
+  <div class="wrap">
+    <a class="brand" href="./">plumber<span>.</span></a>
+    <nav>
+      <a href="./">Обзор</a>
+      <a href="install.html">Установка</a>
+      <a href="rules.html">Правила</a>
+      <a href="protocol.html">Протокол</a>
+      <a href="integration.html">В системе</a>
+    </nav>
+    <button class="theme-btn" id="themeBtn" type="button">Светлая</button>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Эксплуатация</p>
+    <h1>plumber как часть системы</h1>
+    <p class="lead">Демон, файл правил и три точки подключения: сервис, обработчики MIME и
+    программы, которые умеют звать <code>plumb send</code>. Ни одна из них не обязательна —
+    но вместе они дают то, чего на десктопе обычно нет.</p>
+  </div>
+</header>
+
+<main>
+
+<section>
+  <div class="wrap">
+    <h2>1. Демон живёт в сессии пользователя</h2>
+    <p>
+      Демон открывает программы от вашего имени, поэтому он и должен работать под вами, а не
+      системной службой: у системного сервиса нет ни дисплея, ни вашего <code>PATH</code>.
+    </p>
+<pre><code>install -Dm644 plumbing.example ~/.config/plumber/plumbing
+install -Dm644 /dev/stdin ~/.config/systemd/user/plumber.service &lt;&lt;'EOF'
+[Unit]
+Description=plumber — маршрутизация сообщений по правилам
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/plumberd --rules %h/.config/plumber/plumbing
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+EOF
+
+systemctl --user daemon-reload
+systemctl --user enable --now plumber
+systemctl --user is-active plumber      <span class="c"># active</span>
+</code></pre>
+    <div class="note">
+      <code>Restart=on-failure</code> и <code>RestartSec=2</code> — не украшение: демон держит
+      сокет на loopback, и падение без перезапуска означает, что все <code>plumb send</code> в
+      системе начинают молча не работать. Правка правил перезапуска не требует — файл читается по
+      времени изменения.
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>2. Файл правил — в вашем конфиге, а не в проекте</h2>
+    <p>
+      Правила — это политика машины: что считать ссылкой, чем открывать PDF, куда идёт номер
+      детали. Поэтому они лежат в <code>~/.config/plumber/plumbing</code>, а не в репозитории
+      отдельного приложения. Репозиторий может положить свои правила рядом и подключить их
+      <code>include</code>.
+    </p>
+<pre><code><span class="c"># ~/.config/plumber/plumbing</span>
+include local              <span class="c"># ~/.config/plumber/local — личные правила, ниже по приоритету</span>
+
+addr=':([0-9]+)'
+
+type is text
+data matches '([a-zA-Z0-9_/\\-]+\\.pdf)('$addr')?'
+arg isfile $1
+data set $file
+attr add page=$2
+plumb to pdf
+
+type is text
+data matches '([.a-zA-Z0-9_/\\-]+[a-zA-Z0-9_/\\-])('$addr')?'
+arg isfile $1
+data set $file
+attr add addr=$2
+plumb to edit
+</code></pre>
+    <p>
+      Проверять правку — не демоном, а <code>plumb test</code>: он разбирает тот же файл и
+      показывает сообщение, которое получил бы читатель.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>3. Обработчик MIME: файл открывается через правила</h2>
+    <p>
+      Это то, чего у plumber в Plan 9 не было и что нужно современному десктопу: файловый менеджер
+      умеет запускать программу по MIME-типу, а программа — просто отправить путь в
+      <code>plumb</code>. Тогда двойной клик и строка из лога идут одним маршрутом.
+    </p>
+    <p>Ярлык обработчика — обычный <code>.desktop</code>:</p>
+<pre><code><span class="c"># ~/.local/share/applications/plumber-file.desktop</span>
+[Desktop Entry]
+Type=Application
+Name=Открыть через plumber
+Exec=plumber-open edit --cmd 'xdg-open {file}'
+MimeType=text/plain;text/x-python;text/x-rust;text/markdown;
+NoDisplay=false
+Terminal=false
+</code></pre>
+<pre><code>update-desktop-database ~/.local/share/applications
+xdg-mime default plumber-file.desktop text/plain
+xdg-mime query default text/plain      <span class="c"># plumber-file.desktop</span>
+</code></pre>
+    <div class="note warn">
+      Назначать <code>plumber</code> обработчиком по умолчанию для всех текстовых файлов — на
+      любителя: если демон не запущен, файл не откроется вовсе. Разумнее оставить системный
+      обработчик и добавить plumber как вариант в меню «Открыть с помощью», а по умолчанию ставить
+      только для тех типов, где правила действительно знают больше файлового менеджера —
+      например <code>application/x-plumb</code> для ваших собственных ссылок.
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>4. Терминал и редактор</h2>
+    <p>Отправлять умеет любая строка в терминале. Удобно завести короткие обёртки:</p>
+<pre><code><span class="c"># ~/.bashrc или ~/.zshrc</span>
+pl() { plumb send "$*"; }                 <span class="c"># pl https://9fans.net</span>
+plf() { plumb send "$1:${2:-1}"; }        <span class="c"># plf src/main.rs 42</span>
+</code></pre>
+    <p>Из редактора — одна команда, и она не зависит от того, какой редактор у вас завтра:</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Откуда</th><th>Команда</th></tr></thead>
+        <tbody>
+          <tr><td>vim / neovim</td><td><code>:!plumb send %:p:%l</code> — или <code>:!plumb send "&lt;cword&gt;"</code></td></tr>
+          <tr><td>emacs</td><td><code>M-! plumb send (buffer-file-name)</code></td></tr>
+          <tr><td>любой редактор с внешней командой</td><td><code>plumb send "$FILE:$LINE"</code></td></tr>
+          <tr><td>tmux</td><td><code>bind-key p run-shell 'plumb send "#{pane_current_path}"'</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      А в обратную сторону работает <code>plumber-open</code>: он читает порт и запускает
+      программу из шаблона. Это и есть «прыгнуть на строку» — только шаблон задаёте вы, а не автор
+      лога.
+    </p>
+<pre><code>plumber-open edit --cmd 'code -g {file}:{line}'
+plumber-open edit --cmd 'gvim +{line} {file}'
+plumber-open pdf  --cmd 'zathura -P {page} {file}'
+</code></pre>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>5. Что звать из своих программ</h2>
+    <p>
+      Правило хорошего тона: программа не открывает ничего сама, она <b>сообщает</b>, что у неё за
+      данные. Одна строка вместо интеграции с каждым редактором:
+    </p>
+<pre><code>plumb send "$file:$line"                      <span class="c"># строка из вывода сборки</span>
+plumb send "$url"                             <span class="c"># ссылка</span>
+plumb send "$pdf:$page"                       <span class="c"># страница документа</span>
+plumb send "$part" --type text --src catalog  <span class="c"># номер детали, с указанием источника</span>
+</code></pre>
+    <p>
+      Если демона нет, <code>plumb</code> честно вернёт ошибку подключения — вызывающая программа
+      может решить, падать или просто напечатать путь. Это лучше, чем молча ничего не открыть.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>6. Безопасность и границы</h2>
+    <ul>
+      <li>
+        <b>Сокет только loopback.</b> Любой процесс вашего пользователя может отправлять сообщения
+        — но только он. Другого пользователя система не пустит.
+      </li>
+      <li>
+        <b><code>plumb start</code> выключен.</b> Файл правил — исполняемое содержимое: включение
+        этого глагола означает, что тот, кто правит файл, запускает команды от вашего имени. Включать
+        только с <code>--allow-start</code> и только на своём файле правил.
+      </li>
+      <li>
+        <b>Сообщение — это данные, а не код.</b> Демон не исполняет <code>data</code>; исполняет
+        только то, что написано в правилах, и только если разрешено.
+      </li>
+      <li>
+        <b>Размер кадра ограничен</b> (16 МиБ) и ожидание кадра — тоже (5 с на чтение): зависший
+        клиент не держит поток демона.
+      </li>
+      <li>
+        <b>Никакой телеметрии и сети наружу.</b> Ни одного исходящего соединения, кроме того, что
+        запустит ваш опенер.
+      </li>
+    </ul>
+  </div>
+</section>
+
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>MIT OR Apache-2.0 · <a href="https://github.com/kostyk348/plumber">github.com/kostyk348/plumber</a></span>
+    <span><a href="rules.html">← Правила</a> · <a href="./">Обзор</a></span>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

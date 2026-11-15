@@ -85,7 +85,7 @@ Objects: `src`, `dst`, `wdir`, `type`, `attr`, `data`, `arg`. Verbs: `is`, `isfi
 A reader that actually opens what arrives is `plumber-open`:
 
 ```sh
-plumber-open edit                                     # uses the built-in chain: code -g, code, notepad
+plumber-open edit                                     # built-in chain, first program found wins
 plumber-open web    --cmd 'firefox {data}'
 plumber-open pdf    --once --dry-run                  # show the command line, open nothing
 ```
@@ -96,12 +96,15 @@ it. The built-in list is a fallback chain: a candidate whose program is not on `
 the next one is tried, and if none is installed the opener says which ones it tried instead of
 failing silently.
 
-| port | default opener |
+| port | default opener (first program found in `PATH` wins) |
 |---|---|
-| `edit` | `code -g {file}:{line}` → `code {file}` → `notepad {file}` |
-| `web` | `cmd /c start "" {data}` (Windows) → `xdg-open {data}` |
-| `pdf` | `pdfcraft {file} --page {page}` → `cmd /c start "" {file}` → `xdg-open {file}` |
+| `edit` | `code -g {file}:{line}` → `zed {file}:{line}` → `gvim`/`vim`/`nvim +{line} {file}` → `subl` → `kate --line` → `micro` → `notepad` |
+| `web` | `xdg-open {data}` → `open {data}` (macOS) → `cmd /c start "" {data}` (Windows) |
+| `pdf` | `zathura -P {page} {file}` → `pdfcraft {file} --page {page}` → `okular --page` → `evince` → `xdg-open` → `open` → `cmd /c start` |
 | `scene` | `cadcraft {file}` |
+
+The chain is ordered by how much of the message a program can use — a viewer that jumps to a line or
+a page comes before one that cannot — and the portable fallbacks come last. One list, every desktop.
 
 With the PDF rule from `plumbing.example`, `manual.pdf:7` in any log becomes
 `pdfcraft <resolved path> --page 7` — the page number travels as an attribute, so the viewer does
@@ -128,7 +131,7 @@ output — only what the output is. That is the whole trick, and it is forty yea
 cargo test
 ```
 
-Twenty-two tests, no mocks.
+Thirty-nine tests, no mocks, and the CI runs them on Linux, Windows and macOS.
 
 Of the rules and the daemon (13): the wire format round-trips (including data with newlines), the
 first rule set wins, an unmatched message is refused to the sender, an existing path is rewritten to
@@ -138,10 +141,27 @@ bad regex names its line, a rule set without a pattern is refused, a message for
 is held and delivered to the reader that arrives later, and two end-to-end tests drive a real daemon
 over a real socket.
 
-Of the opener (9): a line number fills the editor command, a missing line number drops the colon
-instead of the file, a page message becomes `pdfcraft … --page 7`, `{attr:name}` works, a quoted
-empty argument survives the split (Windows `start` needs it), the fallback chain skips programs that
-are not installed, and a port with no opener says so.
+Of the opener (12): a line number fills the editor command, a missing line number drops the colon
+instead of the file, a missing line drops vim's `+` too, a page message becomes
+`pdfcraft … --page 7`, `{attr:name}` works, a quoted empty argument survives the split (Windows
+`start` needs it), the built-in chain stays page-aware and portable, the fallback chain skips
+programs that are not installed, and a port with no opener says so.
+
+Of the message format (7, new): a wire round-trip keeps every field, `ndata` counts bytes rather than
+characters, a cut that lands inside a multi-byte character does not panic, trailing bytes beyond
+`ndata` are ignored, a short message is an error, attributes with spaces survive, and `Display`
+truncates by characters.
+
+Of the daemon binary (7, new): it answers `PING`, serves the rules it is running, lists the ports from
+the rules, routes a message to a real reader with its attributes, explains an unmatched message and
+an unread port, reloads a changed rules file, answers malformed frames instead of hanging up, refuses
+an absurd frame size, and rejects an unknown command — each test starting the actual `plumberd`.
+
+## Website
+
+[`kostyk348.github.io/plumber`](https://kostyk348.github.io/plumber/) — the manual: install, the rules
+grammar with a verified cookbook, the line protocol with shell and Python clients, and how to wire it
+into a desktop (user service, MIME handlers, editor hooks).
 
 ## Roadmap
 
@@ -149,11 +169,14 @@ are not installed, and a port with no opener says so.
   TCP listener, and a real 9P file server for the platforms that can mount one.
 - Rules for `doi:10.5281/zenodo…` links (to the museum's own bibliography) and for git object ids
   (to `git show`).
-- An `edit` opener that honours a line number without VS Code: `notepad` ignores it, so the opener
-  prints the line and the `addr` attribute instead of pretending.
+- A `.desktop` handler and a `systemd --user` unit shipped with the repo, so "install and it works"
+  needs no manual steps. (Both are documented on the site; generating them is the next step.)
+- A D-Bus or 9P transport for sandboxed apps, where loopback TCP is not reachable.
 
-Done since the first version: `plumb-open` (a reader that opens), the `page.pdf:12` rule that hands
-a page number to PdfCraft, and the hold queue for a port whose reader starts later.
+Done since the first version: `plumber-open` (a reader that opens), the `page.pdf:12` rule that hands
+a page number to PdfCraft, the hold queue for a port whose reader starts later, the portable opener
+chains (`vim`, `zed`, `zathura`, `okular`, `open`), hardened framing (byte-accurate `ndata` without
+panics, a 16 MiB frame limit, a 5 s read timeout), the multi-page manual, and CI on three platforms.
 
 ## Licence
 

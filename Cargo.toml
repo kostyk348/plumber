@@ -1,6 +1,6 @@
 [package]
 name = "plumber"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Plan 9's plumber, rebuilt: message routing between programs by rules, not by integrations"
 license = "MIT OR Apache-2.0"

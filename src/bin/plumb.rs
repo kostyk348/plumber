@@ -50,7 +50,10 @@ fn usage() {
 }
 
 fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str)
 }
 
 /// The text of a command: every positional word, joined.
@@ -77,7 +80,12 @@ fn port_of(args: &[String]) -> Result<u16, String> {
     }
     let path = default_port_file();
     std::fs::read_to_string(&path)
-        .map_err(|e| format!("no daemon port: {e} (start plumberd, or pass --port). Looked in {}", path.display()))?
+        .map_err(|e| {
+            format!(
+                "no daemon port: {e} (start plumberd, or pass --port). Looked in {}",
+                path.display()
+            )
+        })?
         .trim()
         .parse()
         .map_err(|_| format!("{} does not contain a port number", path.display()))
@@ -85,25 +93,40 @@ fn port_of(args: &[String]) -> Result<u16, String> {
 
 fn connect(args: &[String]) -> Result<TcpStream, String> {
     let port = port_of(args)?;
-    TcpStream::connect(("127.0.0.1", port)).map_err(|e| format!("cannot reach the plumber on 127.0.0.1:{port}: {e}"))
+    TcpStream::connect(("127.0.0.1", port))
+        .map_err(|e| format!("cannot reach the plumber on 127.0.0.1:{port}: {e}"))
 }
 
 fn send(args: &[String]) -> Result<(), String> {
     let source = flag(args, "--src").unwrap_or("plumb");
     let kind = flag(args, "--type").unwrap_or("text");
-    let wdir = flag(args, "--wdir").map(str::to_string).or_else(|| std::env::current_dir().ok().map(|d| d.to_string_lossy().into_owned())).unwrap_or_default();
+    let wdir = flag(args, "--wdir")
+        .map(str::to_string)
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|d| d.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default();
     let text = text_arg(args);
     if text.is_empty() {
         return Err("send needs something to send".into());
     }
-    let message = Message { wdir, ..Message::new(source, kind, &text) };
+    let message = Message {
+        wdir,
+        ..Message::new(source, kind, &text)
+    };
     let wire = message.to_wire();
     let mut stream = connect(args)?;
-    write!(stream, "SEND {}\n", wire.len()).map_err(|e| e.to_string())?;
-    stream.write_all(wire.as_bytes()).map_err(|e| e.to_string())?;
+    writeln!(stream, "SEND {}", wire.len()).map_err(|e| e.to_string())?;
+    stream
+        .write_all(wire.as_bytes())
+        .map_err(|e| e.to_string())?;
     stream.flush().map_err(|e| e.to_string())?;
     let mut reply = String::new();
-    BufReader::new(stream).read_line(&mut reply).map_err(|e| e.to_string())?;
+    BufReader::new(stream)
+        .read_line(&mut reply)
+        .map_err(|e| e.to_string())?;
     let reply = reply.trim();
     if let Some(reason) = reply.strip_prefix("ERR ") {
         return Err(reason.to_string());
@@ -119,7 +142,7 @@ fn read(args: &[String]) -> Result<(), String> {
         .cloned()
         .ok_or("read needs a port name")?;
     let mut stream = connect(args)?;
-    write!(stream, "READ {port_name}\n").map_err(|e| e.to_string())?;
+    writeln!(stream, "READ {port_name}").map_err(|e| e.to_string())?;
     stream.flush().map_err(|e| e.to_string())?;
     let mut reader = BufReader::new(stream);
     loop {
@@ -127,11 +150,18 @@ fn read(args: &[String]) -> Result<(), String> {
         if reader.read_line(&mut length).map_err(|e| e.to_string())? == 0 {
             return Ok(()); // the daemon went away
         }
-        let bytes: usize = length.trim().parse().map_err(|_| format!("bad frame length {length:?}"))?;
+        let bytes: usize = length
+            .trim()
+            .parse()
+            .map_err(|_| format!("bad frame length {length:?}"))?;
         let mut body = vec![0u8; bytes];
         reader.read_exact(&mut body).map_err(|e| e.to_string())?;
         match Message::from_wire(&String::from_utf8_lossy(&body)) {
-            Ok(message) => println!("{}\t{}", message.attr_get("addr").unwrap_or("-"), message.data),
+            Ok(message) => println!(
+                "{}\t{}",
+                message.attr_get("addr").unwrap_or("-"),
+                message.data
+            ),
             Err(e) => eprintln!("plumb: unreadable message: {e}"),
         }
     }
@@ -142,7 +172,9 @@ fn request(args: &[String], command: &str) -> Result<(), String> {
     writeln!(stream, "{command}").map_err(|e| e.to_string())?;
     stream.flush().map_err(|e| e.to_string())?;
     let mut text = String::new();
-    stream.read_to_string(&mut text).map_err(|e| e.to_string())?;
+    stream
+        .read_to_string(&mut text)
+        .map_err(|e| e.to_string())?;
     print!("{text}");
     Ok(())
 }
@@ -151,19 +183,35 @@ fn request(args: &[String], command: &str) -> Result<(), String> {
 /// debug a plumbing file.
 fn test(args: &[String]) -> Result<(), String> {
     let path = flag(args, "--rules").ok_or("test needs --rules FILE")?;
-    let wdir = flag(args, "--wdir").map(str::to_string).or_else(|| std::env::current_dir().ok().map(|d| d.to_string_lossy().into_owned())).unwrap_or_default();
+    let wdir = flag(args, "--wdir")
+        .map(str::to_string)
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|d| d.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default();
     let text = text_arg(args);
     let rules_path = PathBuf::from(path);
     let rules_text = std::fs::read_to_string(&rules_path).map_err(|e| format!("{path}: {e}"))?;
-    let rules = Rules::parse(&rules_text, rules_path.parent().unwrap_or(std::path::Path::new(".")))?;
-    let message = Message { wdir, ..Message::new("plumb-test", "text", &text) };
+    let rules = Rules::parse(
+        &rules_text,
+        rules_path.parent().unwrap_or(std::path::Path::new(".")),
+    )?;
+    let message = Message {
+        wdir,
+        ..Message::new("plumb-test", "text", &text)
+    };
     let route = rules.route(&message);
     if !route.matched() {
         println!("no rule matched: this message would be discarded");
         return Ok(());
     }
     println!("rule: line {}", route.rule_line.unwrap_or(0));
-    println!("port: {}", route.dst.clone().unwrap_or_else(|| "(none)".into()));
+    println!(
+        "port: {}",
+        route.dst.clone().unwrap_or_else(|| "(none)".into())
+    );
     if let Some(start) = &route.start {
         println!("start: {start}");
     }
@@ -180,6 +228,8 @@ fn default_port_file() -> PathBuf {
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
         return PathBuf::from(local).join("plumber").join("port");
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
     home.join(".plumber").join("port")
 }

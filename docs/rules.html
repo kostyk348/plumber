@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Файл правил — plumber</title>
+<meta name="description" content="Грамматика файла правил plumber: объекты, глаголы, действия, подстановки, макросы и include. Готовые рецепты и проверка через plumb test.">
+<link rel="canonical" href="https://kostyk348.github.io/plumber/rules.html">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1117'/%3E%3Cpath d='M7 11h9a5 5 0 0 1 0 10H7' stroke='%236ab7ff' stroke-width='3' fill='none'/%3E%3Ccircle cx='24' cy='21' r='2.5' fill='%237ee2b8'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<div class="topnav">
+  <div class="wrap">
+    <a class="brand" href="./">plumber<span>.</span></a>
+    <nav>
+      <a href="./">Обзор</a>
+      <a href="install.html">Установка</a>
+      <a href="rules.html">Правила</a>
+      <a href="protocol.html">Протокол</a>
+      <a href="integration.html">В системе</a>
+    </nav>
+    <button class="theme-btn" id="themeBtn" type="button">Светлая</button>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Справочник</p>
+    <h1>Файл правил</h1>
+    <p class="lead">Обычный текст. Наборы правил отделены пустой строкой; срабатывает первый набор,
+    у которого совпали все условия, поэтому частное пишут выше общего.</p>
+  </div>
+</header>
+
+<main>
+
+<section>
+  <div class="wrap">
+    <h2>Скелет</h2>
+<pre><code><span class="c"># макрос: раскрывается при чтении файла</span>
+addr=':([0-9]+)'
+
+type is text
+data matches '([.a-zA-Z0-9_/\\-]+)('$addr')?'
+arg isfile $1
+data set $file
+attr add addr=$2
+plumb to edit
+</code></pre>
+    <p>
+      Каждая строка — «объект, глагол, аргумент». Первая тройка проверяет сообщение, вторая его
+      меняет, <code>plumb</code> говорит, куда его деть.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Объекты</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Объект</th><th>Что проверяет или меняет</th></tr></thead>
+        <tbody>
+          <tr><td><code>src</code></td><td>имя отправителя</td></tr>
+          <tr><td><code>dst</code></td><td>порт, на который сообщение уже попало</td></tr>
+          <tr><td><code>wdir</code></td><td>рабочий каталог отправителя — база для относительных путей</td></tr>
+          <tr><td><code>type</code></td><td>тип содержимого: <code>text</code>, <code>image</code>, …</td></tr>
+          <tr><td><code>attr</code></td><td>пары вида <code>line=42</code>, <code>page=7</code></td></tr>
+          <tr><td><code>data</code></td><td>сам текст сообщения</td></tr>
+          <tr><td><code>arg</code></td><td>аргумент глагола: что именно проверять (<code>arg isfile $1</code>)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Глаголы</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Глагол</th><th>Смысл</th><th>Пример</th></tr></thead>
+        <tbody>
+          <tr><td><code>is</code></td><td>точное равенство</td><td><code>type is text</code></td></tr>
+          <tr><td><code>matches</code></td><td>регулярное выражение; <code>$1</code>…<code>$n</code> — захваты</td><td><code>data matches '([^ ]+)\.rs:([0-9]+)'</code></td></tr>
+          <tr><td><code>isfile</code></td><td>путь существует и это файл (относительно <code>wdir</code>)</td><td><code>arg isfile $1</code></td></tr>
+          <tr><td><code>isdir</code></td><td>путь существует и это каталог</td><td><code>arg isdir $1</code></td></tr>
+          <tr><td><code>set</code></td><td>заменить содержимое объекта</td><td><code>data set $file</code></td></tr>
+          <tr><td><code>add</code></td><td>добавить атрибут</td><td><code>attr add line=$2</code></td></tr>
+          <tr><td><code>delete</code></td><td>удалить атрибут</td><td><code>attr delete addr</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      <code>isfile</code> и <code>isdir</code> — это то, что делает правила умнее регулярных
+      выражений: <code>README.md</code> уходит в редактор, только если такой файл правда есть рядом
+      с отправителем.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Действия</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Действие</th><th>Что делает</th></tr></thead>
+        <tbody>
+          <tr><td><code>plumb to ПОРТ</code></td><td>отправить сообщение на порт. Основное действие.</td></tr>
+          <tr><td><code>plumb client КОМАНДА</code></td><td>назвать клиента порта: если никто не слушает, сообщение ждёт, пока он откроет порт.</td></tr>
+          <tr><td><code>plumb start КОМАНДА</code></td><td>запустить команду. <b>Выключено</b> без <code>--allow-start</code>: файл правил — исполняемое содержимое.</td></tr>
+          <tr><td><code>plumb hide</code></td><td>не передавать сообщение дальше (глушилка для шумных отправителей).</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Подстановки</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Запись</th><th>Значение</th></tr></thead>
+        <tbody>
+          <tr><td><code>$0</code>, <code>$1</code>, …</td><td>захваты последнего <code>matches</code> (<code>$0</code> — всё совпадение)</td></tr>
+          <tr><td><code>$file</code></td><td>путь, разрешённый из захвата: <code>$wdir</code> + путь</td></tr>
+          <tr><td><code>$dir</code></td><td>каталог файла</td></tr>
+          <tr><td><code>$wdir</code></td><td>рабочий каталог отправителя</td></tr>
+          <tr><td><code>$src</code>, <code>$dst</code>, <code>$type</code></td><td>поля сообщения</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note">
+      Набор правил кончается <b>пустой строкой или строкой комментария</b>. Это осознанное отличие
+      от Plan 9: не «комментарии игнорируются везде», а «комментарий — тоже граница набора», чтобы
+      разбитый на абзацы файл читался как оглавление. Проверить, что получилось, — <code>plumb test</code>.
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Рецепты</h2>
+    <p>Все примеры ниже прогнаны через <code>plumb test</code> — это не пожелания, а рабочий файл.</p>
+
+    <h3>Файл со строкой → редактор</h3>
+<pre><code>type is text
+data matches '([.a-zA-Z0-9_/\\-]+)('$addr')?'
+arg isfile $1
+data set $file
+attr add addr=$2
+plumb to edit
+</code></pre>
+
+    <h3>Ссылка → браузер</h3>
+<pre><code>type is text
+data matches '^(https?|ftp)://'
+plumb to web
+</code></pre>
+
+    <h3>PDF со страницей → просмотрщик</h3>
+    <p>
+      Это правило обязано стоять <b>выше</b> файлового: <code>manual.pdf:7</code> — тоже
+      существующий файл, и общее правило съело бы его первым.
+    </p>
+<pre><code>type is text
+data matches '([.a-zA-Z0-9_/\\-]+\\.pdf)('$addr')?'
+arg isfile $1
+data set $file
+attr add page=$2
+plumb to pdf
+</code></pre>
+
+    <h3>Каталог → файловый менеджер</h3>
+<pre><code>type is text
+data matches '^([.~/a-zA-Z0-9_\\-]+)$'
+arg isdir $1
+data set $file
+plumb to dir
+</code></pre>
+
+    <h3>Объект git → <code>git show</code></h3>
+    <p>
+      Здесь нужен <code>plumb start</code>: у порта нет долгоживущего читателя, команда
+      одноразовая. Демон запускается с <code>--allow-start</code>.
+    </p>
+<pre><code>type is text
+data matches '^([0-9a-f]{7,40})$'
+plumb start git --no-pager show $1 --stat
+</code></pre>
+
+    <h3>Сообщение ждёт своего читателя</h3>
+<pre><code>type is text
+data matches '^XB-([0-9]+)$'
+plumb to catalog
+plumb client catalog-gui {data}
+</code></pre>
+    <p>
+      Если каталог ещё не запущен, сообщение не теряется: оно придерживается и приходит тому, кто
+      откроет порт <code>catalog</code> позже.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Отладка правил</h2>
+    <p>Демон не нужен: <code>plumb test</code> читает файл правил и показывает, что случилось бы.</p>
+<pre><code>$ plumb test --rules plumbing "src/main.rs:42"
+rule: line 10
+port: edit
+--- message the receiver gets ---
+plumb-test
+edit
+/tmp/cook
+text
+addr=:42
+
+21
+/tmp/cook/src/main.rs
+</code></pre>
+    <p>
+      Это не «красивый вывод», а настоящее сообщение: <code>src</code>, <code>dst</code>,
+      <code>wdir</code>, <code>type</code>, атрибуты, пустая строка, длина <code>data</code> и сам
+      <code>data</code>. Ровно то, что получит читатель порта.
+    </p>
+<pre><code>$ plumb test --rules plumbing "https://9fans.net"
+rule: line 12
+port: web
+…
+$ plumb test --rules plumbing "просто текст"
+no rule matched: this message would be discarded
+</code></pre>
+    <h3>Три грабли, на которые наступают все</h3>
+    <ol>
+      <li>
+        <b>Правило с <code>isfile</code> не сработает на несуществующий файл.</b>
+        <code>plumb test</code> запускается из текущего каталога, поэтому
+        <code>src/main.rs:42</code> попадёт в редактор только там, где этот файл есть. Для логов из
+        CI это значит: держите отдельное правило без <code>isfile</code> (см. рецепт выше).
+      </li>
+      <li>
+        <b>Порядок решает.</b> <code>manual.pdf:7</code> — существующий файл, поэтому правило PDF
+        обязано стоять выше файлового, иначе его заберёт редактор с <code>addr=:7</code>.
+      </li>
+      <li>
+        <b>Пустой захват даёт пустой атрибут.</b> На <code>src/main.rs</code> без номера строки
+        получится <code>addr=</code>; читатель должен это терпеть (наш — терпит).
+      </li>
+    </ol>
+    <p>
+      Пустой вывод при непустом файле правил почти всегда значит одно: набор развалился на лишней
+      пустой строке или комментарии посередине. <code>plumb rules</code> (через демон) покажет,
+      какой текст он на самом деле разбирает.
+    </p>
+  </div>
+</section>
+
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>MIT OR Apache-2.0 · <a href="https://github.com/kostyk348/plumber">github.com/kostyk348/plumber</a></span>
+    <span><a href="protocol.html">Дальше: протокол →</a></span>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>
